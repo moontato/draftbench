@@ -14,12 +14,34 @@ const completionSchema = z.object({
   choices: z
     .array(
       z.object({
-        message: z.object({ content: z.string().nullable() }),
+        // Separate reasoning_content/reasoning fields are deliberately not used as answers.
+        message: z.object({ content: z.string().nullable().optional() }),
         finish_reason: z.string().nullable().optional(),
       }),
     )
     .min(1),
 })
+function finalContent(raw: string | null | undefined): string {
+  let content = (raw ?? '').trim()
+  // Some compatible servers put thinking in content instead of a separate field.
+  // Strip only explicit leading, closed blocks; never search prose for a JSON object.
+  while (content.startsWith('<think>')) {
+    const end = content.indexOf('</think>', '<think>'.length)
+    if (end < 0)
+      throw new ProviderError(
+        'malformed',
+        'Model returned unfinished reasoning. Increase output tokens or analyze a smaller passage.',
+      )
+    content = content.slice(end + '</think>'.length).trimStart()
+  }
+  if (!content)
+    throw new ProviderError(
+      'malformed',
+      'Model returned no final answer. Reasoning may have consumed the output budget; increase output tokens or analyze a smaller passage.',
+    )
+  return content
+}
+
 export const nativeTransport: Transport = async (request, signal) => {
   if (signal?.aborted) throw new ProviderError('cancelled', 'Request cancelled.')
   const cancel = () => {
@@ -124,8 +146,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     if (!response.success)
       throw new ProviderError('malformed', 'Completion endpoint returned a malformed response.')
     const choice = response.data.choices[0]
-    if (!choice.message.content?.trim() && choice.finish_reason !== 'length')
-      throw new ProviderError('malformed', 'Completion endpoint returned an empty response.')
+    if (choice.finish_reason !== 'length') finalContent(choice.message.content)
     const limitNote =
       choice.finish_reason === 'length'
         ? ' Test reached its token limit; the endpoint accepted the model. Reviews may need a larger output budget.'
@@ -179,9 +200,9 @@ export class OpenAICompatibleProvider implements AIProvider {
         if (choice.finish_reason === 'length')
           throw new ProviderError(
             'malformed',
-            'Review was truncated. Increase output tokens or analyze a smaller passage.',
+            'Review was truncated. Reasoning and the final answer may share the output budget; increase output tokens or analyze a smaller passage.',
           )
-        let content = (choice.message.content ?? '').trim()
+        let content = finalContent(choice.message.content)
         const fence = content.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/)
         if (fence) content = fence[1]
         try {

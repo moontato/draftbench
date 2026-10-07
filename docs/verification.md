@@ -9,23 +9,24 @@ Recorded on **2026-10-07**, in a Debian 12 x86-64 build environment. This is an 
 | `npm run typecheck` | Passed |
 | `npm run lint` | Passed |
 | `npm run format:check` | Passed |
-| `npm test` | **40 passed**, one opt-in real-server test skipped |
-| `cargo test --locked --manifest-path src-tauri/Cargo.toml` | **6 passed** |
-| `npm run test:ui` | **5 passed** |
+| `npm test` | **51 passed**, one opt-in real-server test skipped |
+| `cargo test --locked --manifest-path src-tauri/Cargo.toml` | **7 passed** |
+| `npm run test:ui` | **6 passed** |
 | `npm audit` | Zero reported vulnerabilities at verification time |
 | `npm run tauri build` | Linux optimized executable and Debian package produced |
 | `scripts/native-smoke.py` against release executable | Passed in the actual bundled WebKit desktop |
 
-The production build has nonfatal dependency annotation/chunk-size warnings. The editor/React/schema bundle is approximately 926 KB uncompressed / 291 KB gzip. Assets ship locally; these warnings do not imply hosted resources or runtime downloads.
+The production build has nonfatal dependency annotation/chunk-size warnings. The editor/React/schema bundle is approximately 927 KB uncompressed / 291 KB gzip. Assets ship locally; these warnings do not imply hosted resources or runtime downloads.
 
 ### What the tests establish
 
 - Real TipTap/ProseMirror Markdown import/export, nested range mapping, marks, hard breaks, UTF-16/Unicode safety, stable session IDs, split/paste uniqueness, preservation of an original ID when a clone is pasted before it, material/type/context invalidation, and fixes isolated in normal Undo/Redo history.
 - Deterministic repeated-word detection, including multiple identical occurrences and Unicode words, with trusted local offsets distinguished from untrusted AI offsets.
 - Mocked review output for all four semantic analyzers; strict envelope/issue validation, invalid Unicode rejection, nonunique/unknown/out-of-scope quote rejection, scope planning, input limits, cancellation, empty-result caching, cache hits/invalidation, and code-as-context rather than a prose diagnostic target.
-- Provider inheritance, per-analyzer outgoing model overrides, optional model discovery, minimal completion connection testing, compatible JSON-format fallback, and classified errors without a real inference server.
+- Provider inheritance, per-analyzer outgoing model overrides, optional model discovery, minimal completion connection testing, compatible JSON-format fallback, and classified errors without a real inference server. Separated reasoning is ignored; fully closed leading thinking blocks are handled; unfinished reasoning and truncated final answers are rejected.
 - UI write/analyze/inspect/apply/undo/save/dismiss workflow, Problems filters/grouping, focus mode, save-copy isolation, canceled dirty-document switches, session-key fallback warning visibility, and exclusion of credentials from persisted JSON.
 - Rust safe writes, conflict detection, filesystem boundaries, symlink rejection, read-only protection, preservation of permissions, endpoint construction, and HTTP failure/cancellation scenarios using a native mock server.
+- Settings allow 30-minute requests and 32,768 output tokens, with the same native timeout cap. Both error and success notifications expire after eight seconds, including repeated-message timer reset and early dismissal; the expanded settings and expiration are UI regression-tested.
 
 ### Native smoke test is not just a browser test
 

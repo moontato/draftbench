@@ -72,6 +72,8 @@ Windows/macOS builds and signing are **not verified** in this environment. Linux
 5. Choose **Analyze document**, **Analyze selection**, or a specific reviewer from **Run analyzer**. Current-paragraph analysis is also in that menu. Document-only reviewers are skipped for selection/paragraph runs; run them explicitly on the document instead.
 6. Click an underline or finding to inspect its passage and explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
 
+Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
+
 Renames preserve document identity/profile. Deletion is permanent and confirmed; directories must be empty. There is no autosave in v0.1. Unsaved changes prompt on document/project changes and window close. Save checks for external changes; conflicts do not overwrite the other file. Reload explicitly or save a copy.
 
 ## Connect llama.cpp `llama-server`
@@ -123,7 +125,15 @@ Test Connection optionally discovers models, then sends a tiny completion with *
 
 Failures distinguish unreachable/DNS/TLS, timeout, authentication, unsupported endpoint, explicitly unavailable model, malformed response, rate limit, and server errors. An ambiguous server 404 is reported as ambiguous rather than guessed. Reasoning models may consume the test output budget; accepted truncated tests are explained, not incorrectly reported as network failures.
 
-Advanced fields include an API key, timeout, temperature, and output-token limit. Long-running/verbose reasoning models may need more output tokens or a longer timeout. Server runtime configuration remains the server operator's responsibility.
+Advanced fields include an API key, timeout (up to **30 minutes / 1,800 seconds**), temperature, and output-token limit (up to **32,768 tokens**). Defaults remain two minutes and 2,048 tokens. Long-running/verbose reasoning models may need more output tokens or a longer timeout. Server runtime configuration remains the server operator's responsibility.
+
+### Thinking/reasoning responses
+
+Draftbench parses only the **final answer** as review JSON. Separate `reasoning_content` / `reasoning` fields are ignored, not displayed or cached as findings. For compatible servers that put reasoning into `message.content`, fully closed leading `<think>…</think>` blocks are removed before strict JSON parsing. Literal tags inside the final JSON are left alone. Unfinished reasoning, missing final answers, arbitrary prose mixed with JSON, and `finish_reason: "length"` reviews are rejected; no partial findings are applied.
+
+The client sends the standard `max_tokens` parameter. On typical local compatible servers this budget covers **reasoning plus the final answer**, not just the review JSON; exact accounting is server-dependent. Increasing the cap does not enlarge the server's context window. Reasoning is neither disabled nor given a separate budget by Draftbench, and token-usage statistics are not currently displayed. Nonstandard reasoning wrappers are not guessed at.
+
+Connection testing uses a deliberately small 256-token budget. A truncated test can confirm that the endpoint accepted the model, with an explicit warning; this is not treated as a successful writing review.
 
 ## Model inheritance and analyzer controls
 

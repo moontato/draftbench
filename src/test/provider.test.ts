@@ -95,6 +95,93 @@ describe('OpenAI-compatible provider', () => {
       expect(transport).toHaveBeenCalledTimes(1)
     }
   })
+  it('forwards the expanded timeout and output token limits', async () => {
+    const transport = vi.fn<Transport>().mockResolvedValue(completion())
+    await new OpenAICompatibleProvider(transport).completeStructured(
+      request,
+      { ...config, timeoutMs: 1_800_000, maxTokens: 32768 },
+      new AbortController().signal,
+    )
+    expect(transport.mock.calls[0][0].timeoutMs).toBe(1_800_000)
+    expect(transport.mock.calls[0][0].body).toMatchObject({ max_tokens: 32768 })
+  })
+  it('uses only final content when reasoning is returned in separate fields', async () => {
+    const transport = vi.fn<Transport>().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: '{"issues":[]}',
+            reasoning_content: '{"issues":["not a finding"]}',
+            reasoning: 'Private thoughts.',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    })
+    await expect(
+      new OpenAICompatibleProvider(transport).completeStructured(
+        request,
+        config,
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ issues: [] })
+  })
+  it('accepts fully closed leading thinking blocks followed by JSON, including fenced JSON', async () => {
+    for (const content of [
+      '<think>Review the passage carefully.</think>\n{"issues":[]}',
+      '<think>First.</think> <think>Second.</think>\n```json\n{"issues":[]}\n```',
+      JSON.stringify({ issues: [{ quote: '<think>literal source text</think>' }] }),
+    ]) {
+      const transport = vi.fn<Transport>().mockResolvedValue(completion(content))
+      const result = await new OpenAICompatibleProvider(transport).completeStructured(
+        request,
+        config,
+        new AbortController().signal,
+      )
+      expect(result).toEqual(content.startsWith('<think>') ? { issues: [] } : JSON.parse(content))
+    }
+  })
+  it('does not use reasoning as a final answer or salvage incomplete thinking/arbitrary prose', async () => {
+    for (const raw of [
+      { choices: [{ message: { reasoning_content: '{"issues":[]}' }, finish_reason: 'stop' }] },
+      completion('<think>Unfinished {"issues":[]}'),
+      completion('<think>Finished thinking.</think>'),
+      completion('<think>Finished.</think>Here is my review: {"issues":[]}'),
+      completion('Undelimited thinking about the passage. {"issues":[]}'),
+      {
+        choices: [
+          {
+            message: { content: '{"issues":[]}', reasoning_content: 'Thinking.' },
+            finish_reason: 'length',
+          },
+        ],
+      },
+    ]) {
+      await expect(
+        new OpenAICompatibleProvider(vi.fn<Transport>().mockResolvedValue(raw)).completeStructured(
+          request,
+          config,
+          new AbortController().signal,
+        ),
+      ).rejects.toMatchObject({ kind: 'malformed' })
+    }
+  })
+  it('explains a tiny connection-test budget being consumed by reasoning', async () => {
+    const transport = vi
+      .fn<Transport>()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValue({
+        choices: [
+          {
+            message: { content: null, reasoning_content: 'Still thinking.' },
+            finish_reason: 'length',
+          },
+        ],
+      })
+    const result = await new OpenAICompatibleProvider(transport).testConnection(config)
+    expect(result.message).toContain('Connected')
+    expect(result.message).toContain('token limit')
+  })
   it('rejects malformed JSON, prose, invalid envelopes, and truncation', async () => {
     for (const raw of [
       completion('not JSON'),

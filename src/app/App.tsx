@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
@@ -45,6 +45,7 @@ import { OpenAICompatibleProvider } from '../ai/providers/openai'
 import { canonical, hash } from '../diagnostics/hash'
 import { profiles, type ProfileId } from '../profiles/profiles'
 import { Modal } from '../ui/Modal'
+import { useNotice } from '../ui/useNotice'
 interface Session {
   path: string
   id: string
@@ -141,9 +142,8 @@ export function App() {
     [rightOpen, setRightOpen] = useState(true),
     [settingsTab, setSettingsTab] = useState<string | null>(null)
   const [busy, setBusy] = useState(false),
-    [status, setStatus] = useState(''),
-    [notice, setNotice] = useState(''),
-    [noticeError, setNoticeError] = useState(false)
+    [status, setStatus] = useState('')
+  const { notice, showNotice, dismissNotice } = useNotice()
   const [profile, setProfile] = useState<ProfileId>('general'),
     [ask, setAsk] = useState<Ask | null>(null),
     [askValue, setAskValue] = useState('')
@@ -159,10 +159,6 @@ export function App() {
   const saveRef = useRef<() => Promise<boolean>>(async () => false),
     proceedRef = useRef<() => Promise<boolean>>(async () => true)
   const persistRef = useRef<() => Promise<void>>(async () => {})
-  const showNotice = useCallback((message: string, error = false) => {
-    setNotice(message)
-    setNoticeError(error)
-  }, [])
   const task = (work: () => Promise<unknown>) => {
     void work().catch((error) => showNotice(errorMessage(error), true))
   }
@@ -277,7 +273,7 @@ export function App() {
         `Read-only: unsupported Markdown (${source.unsupported.join(', ')}). The original file will not be rewritten.`,
         true,
       )
-    else setNotice('')
+    else dismissNotice()
     try {
       await storage.setMetadata('project', meta.current)
     } catch {
@@ -726,10 +722,6 @@ export function App() {
           <span className="header-project">{project?.name ?? 'A workspace for your words'}</span>
         </div>
         <div className="header-actions">
-          <span className="local-label">
-            <span className="local-dot" />
-            Local-first
-          </span>
           <button
             className="icon-button"
             aria-label="Open settings"
@@ -1080,15 +1072,11 @@ export function App() {
       </footer>
       {notice && (
         <div
-          className={`notice ${noticeError ? 'notice-error' : ''}`}
-          role={noticeError ? 'alert' : 'status'}
+          className={`notice ${notice.error ? 'notice-error' : ''}`}
+          role={notice.error ? 'alert' : 'status'}
         >
-          <span>{notice}</span>
-          <button
-            className="icon-button"
-            aria-label="Dismiss notification"
-            onClick={() => setNotice('')}
-          >
+          <span>{notice.message}</span>
+          <button className="icon-button" aria-label="Dismiss notification" onClick={dismissNotice}>
             <X size={14} />
           </button>
         </div>

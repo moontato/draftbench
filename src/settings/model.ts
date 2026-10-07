@@ -1,4 +1,5 @@
 import { z } from 'zod'
+export const AI_LIMITS = { timeoutMs: 30 * 60 * 1000, maxTokens: 32768 } as const
 export const analyzerIds = [
   'repeated-word',
   'clarity',
@@ -17,9 +18,9 @@ export const settingsSchema = z.object({
     .object({
       serverUrl: z.string().default('http://localhost:8080'),
       model: z.string().default('qwen3-8b'),
-      timeoutMs: z.number().min(1000).max(600000).default(120000),
+      timeoutMs: z.number().min(1000).max(AI_LIMITS.timeoutMs).default(120000),
       temperature: z.number().min(0).max(2).default(0.1),
-      maxTokens: z.number().int().min(256).max(16384).default(2048),
+      maxTokens: z.number().int().min(256).max(AI_LIMITS.maxTokens).default(2048),
       credentialGeneration: z.number().int().default(0),
     })
     .default({

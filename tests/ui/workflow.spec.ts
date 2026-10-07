@@ -261,6 +261,46 @@ test('credential-store failure stays visible after save and never persists the k
   expect(JSON.stringify(persisted)).not.toContain('test-only-secret')
 })
 
+test('expanded AI limits persist and notifications expire without manual dismissal', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.clock.install()
+  await page.goto('/')
+  await expect(page.locator('.app-header')).not.toContainText('Local-first')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.locator('.advanced summary').click()
+  const timeout = page.getByLabel('Timeout (seconds)', { exact: true })
+  const tokens = page.getByLabel('Maximum output tokens', { exact: true })
+  await expect(timeout).toHaveAttribute('max', '1800')
+  await expect(tokens).toHaveAttribute('max', '32768')
+  await timeout.fill('1800')
+  await tokens.fill('32768')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.locator('.notice')).toContainText('Settings saved locally.')
+  const saved = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: {
+            calls: {
+              command: string
+              args: { value: { ai: { timeoutMs: number; maxTokens: number } } }
+            }[]
+          }
+        }
+      ).fixture.calls
+        .filter((call) => call.command === 'save_settings')
+        .at(-1)!.args.value.ai,
+  )
+  expect(saved.timeoutMs).toBe(1_800_000)
+  expect(saved.maxTokens).toBe(32768)
+  await page.clock.fastForward(7000)
+  await expect(page.locator('.notice')).toBeVisible()
+  await page.clock.fastForward(1000)
+  await expect(page.locator('.notice')).toHaveCount(0)
+})
+
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText(/This is the frontend preview/)).toBeVisible()

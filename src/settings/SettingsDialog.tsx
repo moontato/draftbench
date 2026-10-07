@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { CheckCircle2, ExternalLink, LoaderCircle, LockKeyhole, X } from 'lucide-react'
 import { analyzers } from '../analyzers/registry'
-import { defaultSettings, type Settings } from './model'
+import { AI_LIMITS, defaultSettings, type Settings } from './model'
 import { storage, errorMessage } from '../storage/desktop'
 import type { AIProvider } from '../ai/types'
 interface Props {
@@ -235,7 +235,7 @@ export function SettingsDialog({
                       <input
                         type="number"
                         min="1"
-                        max="600"
+                        max={AI_LIMITS.timeoutMs / 1000}
                         value={draft.ai.timeoutMs / 1000}
                         onChange={(e) => ai('timeoutMs', Number(e.target.value) * 1000)}
                       />
@@ -257,7 +257,7 @@ export function SettingsDialog({
                     <input
                       type="number"
                       min="256"
-                      max="16384"
+                      max={AI_LIMITS.maxTokens}
                       value={draft.ai.maxTokens}
                       onChange={(e) => ai('maxTokens', Number(e.target.value))}
                     />

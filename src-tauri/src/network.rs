@@ -29,6 +29,10 @@ pub struct HttpRequest {
     pub timeout_ms: u64,
 }
 
+fn request_timeout(timeout_ms: u64) -> Duration {
+    Duration::from_millis(timeout_ms.clamp(1000, 30 * 60 * 1000))
+}
+
 pub fn endpoint(server: &str, route: &str) -> Result<reqwest::Url, NetworkError> {
     if !matches!(route, "models" | "chat/completions") {
         return Err(NetworkError::new(
@@ -77,9 +81,7 @@ pub async fn execute(
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_millis(
-            request.timeout_ms.clamp(1000, 600_000),
-        ))
+        .timeout(request_timeout(request.timeout_ms))
         .build()
         .map_err(|_| NetworkError::new("network", "Could not initialize native HTTP.", None))?;
     let mut builder = if request.body.is_some() {
@@ -179,6 +181,13 @@ fn classify_transport(error: reqwest::Error) -> NetworkError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timeout_supports_thirty_minutes() {
+        assert_eq!(request_timeout(1_800_000), Duration::from_secs(1800));
+        assert_eq!(request_timeout(900_000), Duration::from_secs(900));
+        assert_eq!(request_timeout(u64::MAX), Duration::from_secs(1800));
+        assert_eq!(request_timeout(0), Duration::from_secs(1));
+    }
     #[test]
     fn urls() {
         for host in [
