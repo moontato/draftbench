@@ -1,4 +1,5 @@
 mod network;
+mod recent_projects;
 mod storage;
 
 use serde::Serialize;
@@ -12,6 +13,7 @@ struct DesktopState {
     root: Mutex<Option<PathBuf>>,
     session_key: Mutex<Option<String>>,
     requests: Mutex<HashMap<String, CancellationToken>>,
+    recent_projects: Mutex<()>,
 }
 fn root(state: &DesktopState) -> Result<PathBuf, String> {
     state
@@ -27,9 +29,17 @@ struct Project {
     root: String,
     name: String,
     entries: Vec<storage::FileEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recent_projects: Option<Vec<recent_projects::RecentProject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recent_warning: Option<String>,
 }
 #[tauri::command]
-fn open_project(path: String, state: State<DesktopState>) -> Result<Project, String> {
+fn open_project(
+    path: String,
+    state: State<DesktopState>,
+    app: tauri::AppHandle,
+) -> Result<Project, String> {
     let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
     if !path.is_dir() {
         return Err("Choose a directory.".into());
@@ -41,11 +51,44 @@ fn open_project(path: String, state: State<DesktopState>) -> Result<Project, Str
         .to_string_lossy()
         .into_owned();
     *state.root.lock().map_err(|e| e.to_string())? = Some(path.clone());
+    let recent = (|| {
+        let _lock = state.recent_projects.lock().map_err(|e| e.to_string())?;
+        let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
+        recent_projects::remember(&config, &path, &name)
+    })();
+    let (recent_projects, recent_warning) = match recent {
+        Ok(projects) => (Some(projects), None),
+        Err(_) => (
+            None,
+            Some("Folder opened, but the recent project list could not be saved.".into()),
+        ),
+    };
     Ok(Project {
         root: path.to_string_lossy().into_owned(),
         name,
         entries,
+        recent_projects,
+        recent_warning,
     })
+}
+#[tauri::command]
+fn load_recent_projects(
+    app: tauri::AppHandle,
+    state: State<DesktopState>,
+) -> Result<Vec<recent_projects::RecentProject>, String> {
+    let _lock = state.recent_projects.lock().map_err(|e| e.to_string())?;
+    let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    recent_projects::load(&config)
+}
+#[tauri::command]
+fn remove_recent_project(
+    path: String,
+    app: tauri::AppHandle,
+    state: State<DesktopState>,
+) -> Result<Vec<recent_projects::RecentProject>, String> {
+    let _lock = state.recent_projects.lock().map_err(|e| e.to_string())?;
+    let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    recent_projects::remove(&config, &path)
 }
 #[tauri::command]
 fn list_files(state: State<DesktopState>) -> Result<Vec<storage::FileEntry>, String> {
@@ -236,6 +279,8 @@ pub fn run() {
         .manage(DesktopState::default())
         .invoke_handler(tauri::generate_handler![
             open_project,
+            load_recent_projects,
+            remove_recent_project,
             list_files,
             read_document,
             save_document,

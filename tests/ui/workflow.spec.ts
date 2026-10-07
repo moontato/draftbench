@@ -7,6 +7,10 @@ interface FixtureSeed {
   files?: Record<string, string>
   metadata?: Record<string, unknown>
   settings?: unknown
+  recentProjects?: { path: string; name: string; lastOpened: number }[]
+  unavailableProjects?: string[]
+  recentLoadDelayMs?: number
+  recentWriteFails?: boolean
 }
 async function installDesktopFixture(
   page: import('@playwright/test').Page,
@@ -21,6 +25,7 @@ async function installDesktopFixture(
     const pendingRequests = new Map<string, () => void>()
     const metadata: Record<string, unknown> = seed.metadata ?? {}
     let savedSettings: unknown = seed.settings ?? null
+    let recentProjects = seed.recentProjects ?? []
     const fileHash = async (text: string) =>
       Array.from(
         new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
@@ -37,6 +42,7 @@ async function installDesktopFixture(
         readonly settings: unknown
         failReviews: boolean
         pauseReviews: boolean
+        readonly recentProjects: typeof recentProjects
       }
     }
     testWindow.isTauri = true
@@ -49,6 +55,9 @@ async function installDesktopFixture(
       get settings() {
         return savedSettings
       },
+      get recentProjects() {
+        return recentProjects
+      },
     }
     testWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
     testWindow.__TAURI_INTERNALS__ = {
@@ -59,10 +68,33 @@ async function installDesktopFixture(
         calls.push({ command, args })
         if (command === 'plugin:dialog|open') return '/writing'
         if (command === 'plugin:dialog|confirm') return true
-        if (command === 'open_project')
+        if (command === 'load_recent_projects') {
+          const snapshot = structuredClone(recentProjects)
+          if (seed.recentLoadDelayMs)
+            await new Promise((resolve) => setTimeout(resolve, seed.recentLoadDelayMs))
+          return snapshot
+        }
+        if (command === 'remove_recent_project') {
+          if (seed.recentWriteFails) throw 'Recent project list could not be saved.'
+          recentProjects = recentProjects.filter((project) => project.path !== args.path)
+          return recentProjects
+        }
+        if (command === 'open_project') {
+          const root = String(args.path)
+          if (seed.unavailableProjects?.includes(root)) throw 'Folder not found.'
+          const name =
+            root === '/writing' ? 'My writing' : root.split(/[\\/]/).filter(Boolean).at(-1)!
+          if (!seed.recentWriteFails)
+            recentProjects = [
+              { path: root, name, lastOpened: Date.now() },
+              ...recentProjects.filter((project) => project.path !== root),
+            ].slice(0, 5)
           return {
-            root: '/writing',
-            name: 'My writing',
+            root,
+            name,
+            ...(seed.recentWriteFails
+              ? { recentWarning: 'Folder opened, but the recent project list could not be saved.' }
+              : { recentProjects }),
             entries: Object.keys(files).map((path) => ({
               path,
               name: path,
@@ -70,6 +102,7 @@ async function installDesktopFixture(
               children: [],
             })),
           }
+        }
         if (command === 'list_files')
           return Object.keys(files).map((path) => ({
             path,
@@ -711,6 +744,157 @@ test('Settings General shows the release version without changing preferences', 
         ).length,
     ),
   ).toBe(0)
+})
+
+test('startup recent projects reopen directly, persist across restart, and remain bounded/deduplicated', async ({
+  page,
+  context,
+}) => {
+  const recentProjects = Array.from({ length: 5 }, (_, i) => ({
+    path: `/projects/p${i + 1}`,
+    name: `p${i + 1}`,
+    lastOpened: 1700000000000 - i,
+  }))
+  await installDesktopFixture(page, { recentProjects })
+  await page.goto('/')
+  const recent = page.getByRole('region', { name: 'Recent projects' })
+  await expect(recent.getByRole('button', { name: /^Open recent project/ })).toHaveCount(5)
+  await page.setViewportSize({ width: 1280, height: 600 })
+  await expect(recent.locator('.recent-project-open').first()).toBeInViewport()
+  await page.screenshot({ path: `${process.env.TMPDIR ?? '/tmp'}/draftbench-recent-projects.png` })
+  await recent
+    .getByRole('button', { name: 'Open recent project p3 at /projects/p3', exact: true })
+    .click()
+  await expect(page.getByRole('button', { name: 'essay', exact: true })).toBeVisible()
+  const calls = await page.evaluate(
+    () =>
+      (window as unknown as { fixture: { calls: { command: string; args: { path?: string } }[] } })
+        .fixture.calls,
+  )
+  expect(calls.filter((call) => call.command === 'plugin:dialog|open')).toHaveLength(0)
+  expect(calls.find((call) => call.command === 'open_project')?.args.path).toBe('/projects/p3')
+  const persisted = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: { recentProjects: { path: string; name: string; lastOpened: number }[] }
+        }
+      ).fixture.recentProjects,
+  )
+  expect(persisted).toHaveLength(5)
+  expect(persisted[0].path).toBe('/projects/p3')
+  expect(persisted.filter((p) => p.path === '/projects/p3')).toHaveLength(1)
+  const restarted = await context.newPage()
+  await installDesktopFixture(restarted, { recentProjects: persisted })
+  await restarted.goto('/')
+  await expect(restarted.locator('.recent-project-open').first()).toHaveAttribute(
+    'title',
+    '/projects/p3',
+  )
+  await restarted
+    .getByRole('button', { name: 'Open recent project p3 at /projects/p3', exact: true })
+    .click()
+  await expect(restarted.getByRole('button', { name: 'essay', exact: true })).toBeVisible()
+  expect(
+    await restarted.evaluate(
+      () =>
+        (window as unknown as { fixture: { recentProjects: { path: string }[] } }).fixture
+          .recentProjects.length,
+    ),
+  ).toBe(5)
+  await restarted.close()
+})
+
+test('unavailable recent folders stay removable and never delete writing', async ({ page }) => {
+  await installDesktopFixture(page, {
+    recentProjects: [
+      { path: '/missing', name: 'Missing', lastOpened: 2 },
+      { path: '/writing', name: 'My writing', lastOpened: 1 },
+    ],
+    unavailableProjects: ['/missing'],
+  })
+  await page.goto('/')
+  const recent = page.getByRole('region', { name: 'Recent projects' })
+  await recent
+    .getByRole('button', { name: 'Open recent project Missing at /missing', exact: true })
+    .click()
+  await expect(page.locator('.notice')).toContainText('Could not open this recent folder')
+  await expect(recent).toContainText('Folder unavailable')
+  await expect(
+    page.getByRole('button', { name: 'Open a writing folder', exact: true }),
+  ).toBeVisible()
+  await recent
+    .getByRole('button', { name: 'Remove recent project Missing at /missing', exact: true })
+    .click()
+  await expect(recent.getByRole('button', { name: /^Open recent project/ })).toHaveCount(1)
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.some(
+        (call) => call.command === 'delete_entry',
+      ),
+    ),
+  ).toBe(false)
+  await recent
+    .getByRole('button', { name: 'Open recent project My writing at /writing', exact: true })
+    .click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toContainText(
+    'This is unclear.',
+  )
+})
+
+test('first launch picker opens are remembered even when the startup list resolves late', async ({
+  page,
+  context,
+}) => {
+  await installDesktopFixture(page, { recentLoadDelayMs: 1000 })
+  await page.goto('/')
+  await expect(page.getByRole('region', { name: 'Recent projects' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await expect(page.getByRole('button', { name: 'essay', exact: true })).toBeVisible()
+  const persisted = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: { recentProjects: { path: string; name: string; lastOpened: number }[] }
+        }
+      ).fixture.recentProjects,
+  )
+  expect(persisted[0].path).toBe('/writing')
+  const restarted = await context.newPage()
+  await installDesktopFixture(restarted, { recentProjects: persisted })
+  await restarted.goto('/')
+  await expect(
+    restarted.getByRole('button', {
+      name: 'Open recent project My writing at /writing',
+      exact: true,
+    }),
+  ).toBeVisible()
+  await restarted.close()
+})
+
+test('recent-list write failures do not prevent opening a project or erase existing entries', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    recentWriteFails: true,
+    recentProjects: [{ path: '/writing', name: 'My writing', lastOpened: 1 }],
+  })
+  await page.goto('/')
+  await page
+    .getByRole('button', { name: 'Remove recent project My writing at /writing', exact: true })
+    .click()
+  await expect(page.locator('.notice')).toContainText('Recent project list could not be saved')
+  await expect(
+    page.getByRole('button', { name: 'Open recent project My writing at /writing', exact: true }),
+  ).toBeVisible()
+  await page
+    .getByRole('button', { name: 'Open recent project My writing at /writing', exact: true })
+    .click()
+  await expect(page.getByRole('button', { name: 'essay', exact: true })).toBeVisible()
+  await expect(page.locator('.notice')).toContainText(
+    'Folder opened, but the recent project list could not be saved',
+  )
 })
 
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {

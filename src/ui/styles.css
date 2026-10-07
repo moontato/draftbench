@@ -1039,10 +1039,25 @@ summary:hover .tree-action {
   width: 22px;
   height: 22px;
 }
+.welcome-pane {
+  overflow-y: auto;
+}
 .welcome {
+  flex-shrink: 0;
+  width: 100%;
   margin: auto;
   max-width: 600px;
   padding: 45px 50px 70px;
+}
+.welcome.with-recents {
+  padding: 32px 40px;
+}
+.welcome.with-recents h1 {
+  font-size: 36px;
+  margin-bottom: 16px;
+}
+.welcome.with-recents .eyebrow {
+  margin-bottom: 16px;
 }
 .welcome .eyebrow {
   font-size: 9px;
@@ -1081,6 +1096,70 @@ summary:hover .tree-action {
 }
 .welcome-actions .text-button {
   font-size: 11px;
+}
+.recent-projects {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.recent-projects h2 {
+  font-size: 11px;
+  font-weight: 500;
+  color: #7f8d73;
+  margin-bottom: 10px;
+}
+.recent-projects ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.recent-projects li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid #e8edde;
+}
+.recent-project-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  color: #819470;
+  padding: 10px 0;
+}
+.recent-project-open:hover {
+  color: #536d42;
+}
+.recent-project-open svg {
+  flex-shrink: 0;
+}
+.recent-project-open > span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+.recent-project-open strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.recent-project-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: #9aa38e;
+}
+.recent-project-error {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #99732e;
 }
 .workflow {
   display: flex;

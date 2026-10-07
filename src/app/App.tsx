@@ -35,6 +35,12 @@ import { WritingEditor } from '../editor/WritingEditor'
 import { snapshot } from '../editor/blocks'
 import { applyFix, decorate, jumpTo } from '../editor/diagnostics'
 import { readMarkdown, writeMarkdown, type MarkdownFile } from '../documents/markdown'
+import { RecentProjects } from '../documents/RecentProjects'
+import {
+  RECENT_PROJECT_LIMIT,
+  parseRecentProjects,
+  type RecentProject,
+} from '../storage/recentProjects'
 import { ProblemsPanel } from '../diagnostics/ProblemsPanel'
 import { AnalysisHistoryDialog } from '../diagnostics/AnalysisHistoryDialog'
 import { refreshDiagnostic } from '../diagnostics/mapping'
@@ -128,6 +134,9 @@ function FileTree({
 export function App() {
   const [project, setProject] = useState<Project | null>(null),
     [session, setSession] = useState<Session | null>(null)
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
+  const [recentErrors, setRecentErrors] = useState<Record<string, boolean>>({})
+  const recentRevision = useRef(0)
   const [settings, setSettings] = useState(defaultSettings),
     settingsRef = useRef(settings)
   const [settingsLoaded, setSettingsLoaded] = useState(!desktopAvailable)
@@ -221,6 +230,23 @@ export function App() {
   }, [dismissed, project?.root, fileBusy, showNotice])
   useEffect(() => {
     if (!desktopAvailable) return
+    let active = true
+    const startedAtRevision = recentRevision.current
+    void storage
+      .loadRecentProjects()
+      .then((projects) => {
+        if (active && recentRevision.current === startedAtRevision) setRecentProjects(projects)
+      })
+      .catch((error) => {
+        if (active && recentRevision.current === startedAtRevision)
+          showNotice(errorMessage(error), true)
+      })
+    return () => {
+      active = false
+    }
+  }, [showNotice])
+  useEffect(() => {
+    if (!desktopAvailable) return
     void storage
       .loadSettings()
       .then((raw) => {
@@ -297,13 +323,57 @@ export function App() {
       )
     }
   }
-  const openProject = async () => {
+  const removeRecentProject = async (path: string) => {
+    recentRevision.current++
+    const projects = await storage.removeRecentProject(path)
+    setRecentProjects(projects)
+    setRecentErrors((old) => {
+      const next = { ...old }
+      delete next[path]
+      return next
+    })
+  }
+  const openProject = async (path?: string) => {
     if (!(await confirmLeave())) return
     running.current?.abort()
     running.current = null
     setBusy(false)
-    const selectedProject = await storage.pickProject()
+    let selectedProject: Project | null
+    try {
+      selectedProject = path ? await storage.openProject(path) : await storage.pickProject()
+    } catch (error) {
+      if (path) {
+        setRecentErrors((old) => ({ ...old, [path]: true }))
+        throw new Error(
+          'Could not open this recent folder. It may have moved, been removed, or become inaccessible. Locate it with Open a writing folder, or remove its recent entry.',
+        )
+      }
+      throw error
+    }
     if (!selectedProject) return
+    recentRevision.current++
+    if (selectedProject.recentProjects) {
+      try {
+        setRecentProjects(parseRecentProjects(selectedProject.recentProjects))
+      } catch (error) {
+        showNotice(errorMessage(error), true)
+      }
+    } else {
+      // Retain a session-only MRU entry if app-config persistence is unavailable.
+      const opened = {
+        path: selectedProject.root,
+        name: selectedProject.name,
+        lastOpened: Date.now(),
+      }
+      setRecentProjects((old) =>
+        [opened, ...old.filter((p) => p.path !== opened.path)].slice(0, RECENT_PROJECT_LIMIT),
+      )
+    }
+    setRecentErrors((old) => {
+      const next = { ...old }
+      delete next[selectedProject.root]
+      return next
+    })
     setProject(selectedProject)
     setSession(null)
     sessionRef.current = null
@@ -362,6 +432,7 @@ export function App() {
     } catch (error) {
       showNotice(errorMessage(error), true)
     }
+    if (selectedProject.recentWarning) showNotice(selectedProject.recentWarning, true)
   }
   const refreshTree = async () => {
     const entries = await storage.list()
@@ -995,7 +1066,7 @@ export function App() {
             </div>
           </aside>
         )}
-        <main className="writing-pane">
+        <main className={`writing-pane ${!session ? 'welcome-pane' : ''}`}>
           <div className="document-bar">
             <div className="document-breadcrumb">
               {!leftOpen && (
@@ -1124,7 +1195,7 @@ export function App() {
               </div>
             </>
           ) : (
-            <div className="welcome">
+            <div className={`welcome ${!project && recentProjects.length ? 'with-recents' : ''}`}>
               <span className="eyebrow">STATIC ANALYSIS FOR WRITING</span>
               <h1>
                 Make your point.
@@ -1138,7 +1209,7 @@ export function App() {
               <div className="welcome-actions">
                 <button
                   className="primary-button"
-                  disabled={!desktopAvailable}
+                  disabled={!desktopAvailable || fileBusy || saving}
                   onClick={() => fileTask(project ? createDocument : openProject)}
                 >
                   <FolderOpen size={17} />
@@ -1149,6 +1220,15 @@ export function App() {
                   Set up local AI <ChevronRight size={14} />
                 </button>
               </div>
+              {!project && desktopAvailable && (
+                <RecentProjects
+                  projects={recentProjects}
+                  errors={recentErrors}
+                  busy={fileBusy || saving}
+                  onOpen={(path) => fileTask(() => openProject(path))}
+                  onRemove={(path) => fileTask(() => removeRecentProject(path))}
+                />
+              )}
               <div className="workflow">
                 <span>
                   01 <strong>Write</strong>

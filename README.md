@@ -4,11 +4,12 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.1.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.1.2 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
 ## What works
 
 - Native folder picker and Markdown project tree; create documents/folders, rename, delete files or empty folders, save, save a copy, and reload.
+- Startup recent-project list: reopen one of your five most recently opened folders directly, without navigating the folder picker.
 - Comfortable rich-text prose editing: paragraphs, headings, lists, links, emphasis, quotes, inline code, code blocks, and hard breaks.
 - Collapsible document/analysis panes and focus mode.
 - Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings.
@@ -49,7 +50,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.1.1_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.1.2_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -73,6 +74,8 @@ Windows/macOS builds and signing are **not verified** in this environment. Linux
 5. Choose **Analyze document**, **Analyze selection**, or a specific reviewer from **Run analyzer**. Current-paragraph analysis is also in that menu. Document-only reviewers are skipped for selection/paragraph runs; run them explicitly on the document instead.
 6. Click an underline or finding to inspect its passage and explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
 
+On startup, **Recent projects** shows up to five previously opened folders, most recent first, with names and paths. Click one to reopen the project directly; no folder picker or automatic opening is involved. Only successful folder opens update the list, and canonical paths avoid duplicate aliases. Missing/offline/inaccessible folders are checked only when clicked, report an error, and remain removable using the entry's × button. Removing a recent entry never deletes the folder or its documents. Your current project/editor remain intact if an attempted recent folder cannot be opened. The list starts filling as folders are opened in this version.
+
 The **Review finding** section can be collapsed using its heading chevron without dismissing or forgetting the selected finding. Expand it again, or click a finding card to inspect it. Drag the divider above the section to adjust its height; the focused divider also supports Up/Down and Home/End keys. The section shrinks automatically in shorter windows, leaving room for the finding cards. Height is retained while the pane stays open, including across collapse/expand.
 
 Successful manual reviews save automatically. Reopening an unchanged document restores the saved findings without contacting the model, labeled **Saved review** with the last run's scope and timestamp. The document, writing profile, analyzer versions, and relevant effective analysis settings must match exactly; otherwise, no saved findings are restored. Older cache-only sidecars become eligible after the next successful review. Dismissals remain session-only.
@@ -81,7 +84,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.1.1**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
+The installed/source build's version is shown in **Settings → General** (currently **v0.1.2**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -186,7 +189,9 @@ my-project/
 
 Markdown is the source of truth. Project sidecars are optional and recoverable. File saves use a same-directory temporary file, flush, and atomic rename, retaining existing permissions where possible. A failed save keeps the dirty editor buffer. External changes are checked on save; no background filesystem watcher is implemented.
 
-Settings live in Tauri's OS app-config directory (for example `~/.config/org.draftbench.desktop/settings.json` on Linux). API keys use the OS credential store—Secret Service on Linux, Keychain on macOS, Credential Manager on Windows. If secure storage is unavailable, Draftbench warns and uses a **session-only** key; there is no plaintext fallback. Key changes apply when testing or saving and clear cached reviews, even if you later cancel other settings changes.
+Settings live in Tauri's OS app-config directory (for example `~/.config/org.draftbench.desktop/settings.json` on Linux). Recent project names, canonical paths, and last-opened timestamps live separately in `recent-projects.json` in that same app-config directory, not inside a writing project. The list is local and unencrypted; it contains no document text or API keys. If it cannot be saved, a warning is shown but opening/writing still works (the current session can retain a recent entry).
+
+API keys use the OS credential store—Secret Service on Linux, Keychain on macOS, Credential Manager on Windows. If secure storage is unavailable, Draftbench warns and uses a **session-only** key; there is no plaintext fallback. Key changes apply when testing or saving and clear cached reviews, even if you later cancel other settings changes.
 
 **Analysis caches contain quotes/replacement text from your documents.** They are ordinary local sidecar files, not encrypted. Use **Settings → Analysis → Clear analysis cache** to remove cached reviews, saved findings, and the run history when needed; avoid publishing `.draftbench/analysis.json` if your writing is private. Keys and authorization headers never enter project files, settings JSON, or cache keys.
 
@@ -293,12 +298,15 @@ sudo apt-get install -y webkit2gtk-driver xvfb xauth
 cargo install tauri-driver --locked
 npm run tauri build -- --debug
 # Terminal 1 (a normal graphical session can omit dbus-run-session/Xvfb):
-dbus-run-session -- xvfb-run -a tauri-driver --native-driver /usr/bin/WebKitWebDriver --port 4444
+# A clean disposable config is required; this test now writes recent-project metadata.
+SMOKE_CONFIG=$(mktemp -d)
+XDG_CONFIG_HOME="$SMOKE_CONFIG" dbus-run-session -- xvfb-run -a tauri-driver --native-driver /usr/bin/WebKitWebDriver --port 4444
+# After stopping the driver, remove the disposable $SMOKE_CONFIG directory.
 # Terminal 2:
 python3 scripts/native-smoke.py
 ```
 
-This launches the bundled desktop and checks real IPC, scoped Markdown save/load, conflict protection, and Rust HTTP against a mock compatible server without CORS headers. It does not prove model quality or real llama.cpp compatibility.
+This launches the bundled desktop and checks real IPC, scoped Markdown save/load, conflict protection, Rust HTTP against a mock compatible server without CORS headers, and recent-folder persistence/direct reopening across a full app restart. It does not prove model quality or real llama.cpp compatibility.
 
 Optional real-server check (sends only a short test fixture to this explicitly configured endpoint):
 

@@ -2,6 +2,7 @@
 """Opt-in Linux desktop smoke test against tauri-driver (no llama-server needed).
 Build with `npm run tauri build -- --debug`; start tauri-driver under Xvfb/D-Bus.
 Uses the real bundled webview, IPC, Rust filesystem, and native HTTP transport.
+Launch tauri-driver with a disposable XDG_CONFIG_HOME; project opens update app-config recents.
 """
 import json
 import os
@@ -59,6 +60,8 @@ try:
             'args': [command, args or {}],
         })
     assert invoke('use_session_key', {'key': ''})['ok']  # Never read a user's real OS credentials.
+    recents = invoke('load_recent_projects')
+    assert recents['ok'] and recents['value'] == [], 'Run the driver with a clean disposable XDG_CONFIG_HOME before this test.'
     with tempfile.TemporaryDirectory(prefix='draftbench-native-', dir=os.environ.get('TMPDIR')) as directory:
         project = invoke('open_project', {'path': directory})
         assert project['ok'] and project['value']['name'].startswith('draftbench-native-'), project
@@ -66,6 +69,15 @@ try:
         saved = invoke('save_document', {'path': 'essay.md', 'content': source, 'expectedHash': None})
         assert saved['ok'], saved
         assert Path(directory, 'essay.md').read_text() == source
+        canonical = str(Path(directory).resolve())
+        assert project['value']['recentProjects'][0]['path'] == canonical, project
+        assert invoke('open_project', {'path': directory})['ok']
+        assert len(invoke('load_recent_projects')['value']) == 1
+        assert not invoke('open_project', {'path': str(Path(directory, 'missing-folder'))})['ok']
+        assert len(invoke('load_recent_projects')['value']) == 1
+        removed = invoke('remove_recent_project', {'path': canonical})
+        assert removed['ok'] and removed['value'] == [], removed
+        assert Path(directory, 'essay.md').read_text() == source  # Removing a recent never deletes files.
         loaded = invoke('read_document', {'path': 'essay.md'})
         assert loaded['value']['content'] == source and loaded['value']['hash'] == saved['value'], loaded
         failed = invoke('save_document', {'path': 'essay.md', 'content': 'overwrite', 'expectedHash': 'stale'})
@@ -85,7 +97,32 @@ try:
         assert models['ok'] and models['value']['data'][0]['id'] == 'mock-reviewer', models
         complete = invoke('ai_http', {'request': {'id': 'native-review', 'serverUrl': endpoint, 'route': 'chat/completions', 'body': {'model': 'mock-reviewer', 'messages': [{'role': 'user', 'content': 'Review.'}]}, 'timeoutMs': 3000}})
         assert complete['ok'] and complete['value']['choices'][0]['message']['content'] == '{"issues":[]}', complete
-        print('PASS: real bundled desktop UI, IPC, local Markdown CRUD, conflict protection, path boundary, and native HTTP (mock compatible server).')
+        assert invoke('save_document', {'path': 'reopen.md', 'content': source, 'expectedHash': None})['ok']
+        assert invoke('open_project', {'path': directory})['ok']
+        webdriver('DELETE', '/session/' + session)
+        session = None
+        value = webdriver('POST', '/session', {'capabilities': {'alwaysMatch': {'tauri:options': {'application': BINARY}}}})
+        session = value['sessionId']
+        route = '/session/' + session
+        webdriver('POST', route + '/timeouts', {'script': 120000})
+        for _ in range(40):
+            text = webdriver('POST', route + '/execute/sync', {'script': 'return document.body.innerText', 'args': []})
+            if 'Recent projects' in text and Path(directory).name in text:
+                break
+            time.sleep(.25)
+        assert 'Recent projects' in text and Path(directory).name in text, text
+        clicked = webdriver('POST', route + '/execute/sync', {'script': 'const button = document.querySelector(".recent-project-open"); if (!button) return false; button.click(); return true;', 'args': []})
+        assert clicked
+        for _ in range(40):
+            text = webdriver('POST', route + '/execute/sync', {'script': 'return document.body.innerText', 'args': []})
+            if 'reopen' in text:
+                break
+            time.sleep(.25)
+        assert 'reopen' in text, text
+        assert invoke('read_document', {'path': 'reopen.md'})['value']['content'] == source
+        assert invoke('remove_recent_project', {'path': canonical})['value'] == []
+        assert Path(directory, 'reopen.md').read_text() == source
+        print('PASS: real bundled desktop UI, IPC, recent projects across app restart/direct reopen (deduplication/failure/removal), local Markdown CRUD, conflict protection, path boundary, and native HTTP (mock compatible server).')
 finally:
     if session:
         webdriver('DELETE', '/session/' + session)

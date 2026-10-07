@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open, confirm } from '@tauri-apps/plugin-dialog'
 import type { Settings } from '../settings/model'
+import { parseRecentProjects, type RecentProject } from './recentProjects'
 export interface FileEntry {
   path: string
   name: string
@@ -11,6 +12,8 @@ export interface Project {
   root: string
   name: string
   entries: FileEntry[]
+  recentProjects?: RecentProject[]
+  recentWarning?: string
 }
 export interface LoadedFile {
   content: string
@@ -18,6 +21,11 @@ export interface LoadedFile {
 }
 export const desktopAvailable = isTauri()
 export const storage = {
+  openProject: (path: string) => invoke<Project>('open_project', { path }),
+  loadRecentProjects: async () =>
+    parseRecentProjects(await invoke<unknown>('load_recent_projects')),
+  removeRecentProject: async (path: string) =>
+    parseRecentProjects(await invoke<unknown>('remove_recent_project', { path })),
   async pickProject(): Promise<Project | null> {
     const path = await open({ directory: true, multiple: false, title: 'Open a Markdown project' })
     return typeof path === 'string' ? invoke<Project>('open_project', { path }) : null
