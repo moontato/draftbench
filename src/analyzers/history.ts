@@ -4,13 +4,15 @@ import type { Scope } from '../diagnostics/types'
 import { canonical, hash } from '../diagnostics/hash'
 import {
   effectiveConfig,
+  configurationHash,
   inputBudgetsSchema,
   MAX_PARALLEL_JOBS,
   type Settings,
+  type EffectiveConfig,
 } from '../settings/model'
-import type { ProfileId } from '../profiles/profiles'
+import { getProfiles, type ProfileId } from '../profiles/profiles'
 import type { SavedReviewSummary } from './savedReviews'
-import { analysisParallelism } from './jobs'
+import { createAnalysisJobs } from './jobs'
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
 const count = z.number().int().nonnegative()
@@ -22,6 +24,9 @@ const reviewerSchema = z.object({
   engine: z.enum(['ai', 'deterministic', 'unknown']),
   server: z.string().max(2000).optional(),
   model: z.string().max(500).optional(),
+  backend: z.string().max(100).optional(),
+  backendId: z.string().max(64).optional(),
+  parallelJobs: count.min(1).max(MAX_PARALLEL_JOBS).optional(),
   configurationHash: digest,
   options: z
     .object({ timeoutMs: count, maxTokens: count, temperature: z.number().min(0).max(2) })
@@ -51,7 +56,8 @@ const runSchema = z.object({
   startedAt: timestamp,
   finishedAt: timestamp.nullable(),
   scope: z.enum(['selection', 'block', 'document']),
-  profile: z.enum(['general', 'technical', 'essay', 'email']),
+  profile: z.string().min(1).max(64),
+  profileName: z.string().max(100).optional(),
   force: z.boolean().nullable(),
   parallelJobs: count.min(1).max(MAX_PARALLEL_JOBS).optional(),
   inputBudgets: inputBudgetsSchema.optional(),
@@ -89,21 +95,28 @@ export class AnalysisHistory {
     analyzers: Analyzer[],
     settings: Settings,
   ): string {
+    const scheduler = createAnalysisJobs(analyzers, settings)
     const record: AnalysisRun = {
       id: crypto.randomUUID(),
       documentId,
       documentHash,
       scope,
       profile,
+      profileName: getProfiles(settings)[profile]?.name,
       force,
-      parallelJobs: analysisParallelism(analyzers, settings),
+      parallelJobs: scheduler.limit,
       inputBudgets: inputBudgetsSchema.parse(settings.analysis),
       origin: 'manual',
       startedAt: Date.now(),
       finishedAt: null,
       status: 'running',
       reviewers: analyzers.map((analyzer) => {
-        const config = effectiveConfig(settings, analyzer.id)
+        let config: EffectiveConfig
+        try {
+          config = effectiveConfig(settings, analyzer.id)
+        } catch {
+          config = settings.ai
+        }
         return {
           id: analyzer.id,
           name: analyzer.name,
@@ -113,6 +126,9 @@ export class AnalysisHistory {
             ? {
                 server: safeServer(config.serverUrl),
                 model: config.model,
+                backend: config.backendName,
+                backendId: config.backendId,
+                parallelJobs: scheduler.backendLimit(config.backendId ?? 'default'),
                 options: {
                   timeoutMs: config.timeoutMs,
                   maxTokens: config.maxTokens,
@@ -120,7 +136,7 @@ export class AnalysisHistory {
                 },
               }
             : {}),
-          configurationHash: hash(canonical(config)),
+          configurationHash: configurationHash(config),
           status: 'pending',
           findings: 0,
           cacheHits: 0,
@@ -221,11 +237,14 @@ export class AnalysisHistory {
     this.runs = []
   }
   export(): unknown {
-    return { version: 1, runs: this.runs }
+    return { version: 2, runs: this.runs }
   }
   import(raw: unknown) {
     const envelope = z
-      .object({ version: z.literal(1), runs: z.array(z.unknown()).max(300) })
+      .object({
+        version: z.union([z.literal(1), z.literal(2)]),
+        runs: z.array(z.unknown()).max(300),
+      })
       .safeParse(raw)
     if (!envelope.success)
       throw new Error('Analysis history is incompatible or corrupt; it will not be shown.')

@@ -1451,6 +1451,40 @@ summary:hover .tree-action {
   padding: 10px 12px;
   font-size: 12px;
 }
+.field textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #526747;
+  background: #fffefa;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 10px 12px;
+}
+.management-editor {
+  margin: 18px 0;
+  padding: 16px;
+  background: #f6f8f0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.management-actions,
+.backend-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.management-editor fieldset {
+  border: 1px solid var(--line);
+  padding: 10px;
+}
+.management-editor .check-field {
+  margin: 10px 0;
+}
 .field small {
   font-size: 10px;
   color: #9ba68e;

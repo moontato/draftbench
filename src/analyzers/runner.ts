@@ -1,8 +1,13 @@
 import type { Analyzer, AnalysisUnit } from './types'
 import type { Block, Diagnostic, EngineMetadata, Scope, Snapshot } from '../diagnostics/types'
-import { canonical, hash } from '../diagnostics/hash'
+import { hash } from '../diagnostics/hash'
 import { resolveIssue } from '../diagnostics/mapping'
-import { DEFAULT_INPUT_BUDGETS, type EffectiveConfig, type InputBudgets } from '../settings/model'
+import {
+  configurationHash as hashConfiguration,
+  DEFAULT_INPUT_BUDGETS,
+  type EffectiveConfig,
+  type InputBudgets,
+} from '../settings/model'
 import type { AIProvider } from '../ai/types'
 import { AnalysisCache } from './cache'
 import { type AnalysisJobs, mapConcurrent } from './jobs'
@@ -31,6 +36,8 @@ export function planScope(analyzer: Analyzer, input: Snapshot, scope: Scope): An
     targets = targets.filter((b) => b.from <= caret && b.to >= caret).slice(0, 1)
   }
   if (!targets.length) return []
+  if (analyzer.preferredScope === 'selection')
+    return [{ targets, context: [], documentScope: false }]
   if (analyzer.preferredScope === 'document')
     return [
       { targets, context: input.blocks.filter((b) => b.type === 'codeBlock'), documentScope: true },
@@ -45,8 +52,15 @@ export function planScope(analyzer: Analyzer, input: Snapshot, scope: Scope): An
 }
 export function engineMetadata(analyzer: Analyzer, config: EffectiveConfig): EngineMetadata {
   return analyzer.engine === 'ai'
-    ? { kind: 'ai', name: 'OpenAI-Compatible', server: config.serverUrl, model: config.model }
-    : { kind: 'deterministic', name: 'Local rules' }
+    ? {
+        kind: 'ai',
+        name: 'OpenAI-Compatible',
+        server: config.serverUrl,
+        model: config.model,
+        backend: config.backendName,
+        backendId: config.backendId,
+      }
+    : { kind: 'deterministic', name: analyzer.engineName ?? 'Local rules' }
 }
 export interface RunResult {
   findings: Diagnostic[]
@@ -66,7 +80,7 @@ export async function runAnalyzer(
   jobs?: AnalysisJobs,
   budgets: InputBudgets = DEFAULT_INPUT_BUDGETS,
 ): Promise<RunResult> {
-  const configurationHash = hash(canonical(config))
+  const configurationHash = hashConfiguration(config)
   const results = await mapConcurrent(
     planScope(analyzer, input, scope),
     analyzer.engine === 'ai' ? (jobs?.limit ?? 1) : 1,
@@ -89,7 +103,9 @@ export async function runAnalyzer(
       if (result) cacheHits++
       else {
         const analyze = () => analyzer.analyze({ input, unit, scope, config, provider, signal })
-        result = await (jobs && analyzer.engine === 'ai' ? jobs.run(signal, analyze) : analyze())
+        result = await (jobs && analyzer.engine === 'ai'
+          ? jobs.run(signal, analyze, config.backendId)
+          : analyze())
         requests++
       }
       if (signal.aborted) throw new Error('Analysis cancelled.')
@@ -110,8 +126,15 @@ export async function runAnalyzer(
           warnings.push('An out-of-scope finding was discarded.')
           continue
         }
+        const target = unit.targets.find((b) => b.id === issue.block_id)!
+        const original = input.blocks.find((b) => b.id === issue.block_id)!
+        const selectionOffset = original.positions.indexOf(target.positions[0])
+        const mappedIssue =
+          analyzer.engine === 'deterministic' && issue.offset !== undefined
+            ? { ...issue, offset: issue.offset + Math.max(0, selectionOffset) }
+            : issue
         const finding = resolveIssue(
-          issue,
+          mappedIssue,
           scope === 'selection' ? input : { ...input, selection: undefined },
           analyzer.id,
           analyzer.version,

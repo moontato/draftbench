@@ -1,0 +1,98 @@
+[
+  {
+    "id": "clarity-indirect",
+    "profile": "technical",
+    "source": "The implementation of the operationalization of the proposed adjustment is contingent upon the completion of the facilitation of the team's alignment process.",
+    "analyzer": "clarity",
+    "expectedBehavior": "Flag genuinely opaque, indirect meaning. Prefer a precise local explanation, not wholesale prose generation.",
+    "expectedQuote": "implementation of the operationalization"
+  },
+  {
+    "id": "clarity-clean-short",
+    "profile": "general",
+    "source": "The team will publish the report on Friday. Please send corrections by Thursday afternoon.",
+    "analyzer": "clarity",
+    "expectedBehavior": "Clear instructions should not be flagged merely to produce findings.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "clarity-clean-long",
+    "profile": "essay",
+    "source": "Although the first experiment failed because the sensor was damaged, the second experiment used a replacement sensor and produced consistent measurements across all three trials.",
+    "analyzer": "clarity",
+    "expectedBehavior": "Length alone is not a clarity problem; the causal relationships here are explicit.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "reference-two-antecedents",
+    "profile": "email",
+    "source": "I emailed Miriam about Sofia after she missed the deadline.",
+    "analyzer": "ambiguous-reference",
+    "expectedBehavior": "The reader cannot identify whether Miriam or Sofia missed the deadline.",
+    "expectedQuote": "she missed the deadline"
+  },
+  {
+    "id": "reference-neighbor-clean",
+    "profile": "technical",
+    "source": "The server rejected requests without an authentication token.\n\nThis policy prevented anonymous access to private documents.",
+    "analyzer": "ambiguous-reference",
+    "expectedBehavior": "Use neighboring context; this policy has a clear antecedent.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "reference-explicit-name-clean",
+    "profile": "email",
+    "source": "Miriam asked Sofia to revise the report. Sofia will send the revision tomorrow.",
+    "analyzer": "ambiguous-reference",
+    "expectedBehavior": "Explicit names avoid reference ambiguity; return no finding.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "redundancy-unnecessary-restatement",
+    "profile": "essay",
+    "source": "The survey found no meaningful difference in completion time between the two groups.\n\nThe survey results indicate that the groups did not differ meaningfully in how long they took to finish.\n\nWe therefore compared their error rates instead.",
+    "analyzer": "redundancy",
+    "expectedBehavior": "Flag the second paragraph's unnecessary restatement of the first result, not the distinct next step.",
+    "expectedQuote": "The survey results indicate"
+  },
+  {
+    "id": "redundancy-distinct-results-clean",
+    "profile": "technical",
+    "source": "The first group finished in ten minutes.\n\nThe second group finished in twelve minutes but made fewer errors.",
+    "analyzer": "redundancy",
+    "expectedBehavior": "Distinct comparison results are not redundant merely because vocabulary is shared.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "redundancy-useful-reminder-clean",
+    "profile": "email",
+    "source": "Please submit the signed form by Friday.\n\nYou can upload the form through the secure portal or bring it to reception.\n\nAs a reminder, Friday is the deadline because payroll closes that evening.",
+    "analyzer": "redundancy",
+    "expectedBehavior": "A short, useful closing reminder with its reason is not automatically a problem.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "structure-unfulfilled-promise",
+    "profile": "essay",
+    "source": "This report compares the two options on cost, reliability, and deployment time.\n\nOption A costs $10,000, while Option B costs $12,000.\n\nThese cost figures establish Option A as the less expensive choice, and conclude our comparison.",
+    "analyzer": "structure",
+    "expectedBehavior": "Flag the missing reliability/deployment discussion promised in the opening. Cross-paragraph reorganization should be report-only.",
+    "expectedQuote": "cost, reliability, and deployment time"
+  },
+  {
+    "id": "structure-clean-comparison",
+    "profile": "technical",
+    "source": "We compared the two options on cost and deployment time.\n\nOption A costs $10,000 and takes two weeks to deploy. Option B costs $12,000 and takes one week.\n\nChoose Option A if cost matters most, or Option B if deployment speed matters most.",
+    "analyzer": "structure",
+    "expectedBehavior": "The comparison fulfills its opening promise and reaches a supported recommendation.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "structure-clean-email",
+    "profile": "email",
+    "source": "Please approve the attached budget by Thursday.\n\nThe revised total is $5,000 lower than the previous estimate because we removed the optional workshop.\n\nReply with your approval or any requested changes, and I will send the final version to finance.",
+    "analyzer": "structure",
+    "expectedBehavior": "A clear action, relevant context and explicit next step need no formulaic restructuring.",
+    "expectNoFindings": true
+  }
+]

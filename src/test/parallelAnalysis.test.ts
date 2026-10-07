@@ -155,18 +155,21 @@ describe('bounded parallel analysis', () => {
     settings.analyzers.structure.model = 'different'
     const mock = delayedProvider(),
       jobs = new AnalysisJobs(analysisParallelism(analyzers, settings))
-    await mapConcurrent(analyzers, jobs.limit, (a) =>
-      runAnalyzer(
-        a,
-        input(),
-        'document',
-        effectiveConfig(settings, a.id),
-        mock.provider,
-        new AbortController().signal,
-        new AnalysisCache(),
-        false,
-        jobs,
-      ),
+    await mapConcurrent(
+      analyzers.filter((a) => settings.analyzers[a.id]?.enabled !== false),
+      jobs.limit,
+      (a) =>
+        runAnalyzer(
+          a,
+          input(),
+          'document',
+          effectiveConfig(settings, a.id),
+          mock.provider,
+          new AbortController().signal,
+          new AnalysisCache(),
+          false,
+          jobs,
+        ),
     )
     expect(mock.peak).toBe(1)
   })

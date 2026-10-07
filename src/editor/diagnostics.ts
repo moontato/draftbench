@@ -76,7 +76,9 @@ export function applyFix(
   const replacement = finding.replacement.replace(/\r\n?/g, '\n')
   if (replacement.length) {
     const resolved = editor.state.doc.resolve(fresh.from)
-    const marks = resolved.marks()
+    // At a mark boundary, marks() may inherit the preceding unmarked space.
+    // Use the quoted text's marks, not its neighbor's, for a reviewed replacement.
+    const marks = resolved.nodeAfter?.isText ? resolved.nodeAfter.marks : resolved.marks()
     const nodes: PMNode[] = []
     replacement.split('\n').forEach((line, index) => {
       if (index && editor.schema.nodes.hardBreak)

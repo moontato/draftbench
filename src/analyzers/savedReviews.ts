@@ -2,10 +2,17 @@ import { z } from 'zod'
 import { canonical, hash } from '../diagnostics/hash'
 import { refreshDiagnostic, resolveIssue } from '../diagnostics/mapping'
 import type { Diagnostic, Issue, Scope, Snapshot } from '../diagnostics/types'
-import { profiles, type ProfileId } from '../profiles/profiles'
+import {
+  analyzerEnabled,
+  getProfiles,
+  globallyEnabled,
+  profiles,
+  type ProfileId,
+} from '../profiles/profiles'
 import {
   DEFAULT_INPUT_BUDGETS,
   effectiveConfig,
+  configurationHash,
   inputBudgetsSchema,
   sameInputBudgets,
   type InputBudgets,
@@ -37,7 +44,8 @@ const reviewSchema = z.object({
   documentHash: digest,
   markdownHash: digest,
   serializedHash: digest,
-  profile: z.enum(['general', 'technical', 'essay', 'email']),
+  profile: z.string().min(1).max(64),
+  profileHash: digest.optional(),
   scope: z.enum(['selection', 'block', 'document']),
   analyzedAt: z.number().int().nonnegative().max(8_640_000_000_000_000),
   inputBudgets: inputBudgetsSchema.optional(),
@@ -67,6 +75,9 @@ export interface RestoredReview {
 export class SavedReviews {
   private entries = new Map<string, SavedReview>()
   constructor(private analyzers: Analyzer[]) {}
+  setAnalyzers(analyzers: Analyzer[]) {
+    this.analyzers = analyzers
+  }
 
   capture(
     input: Snapshot,
@@ -78,6 +89,7 @@ export class SavedReviews {
     reviewedIds: string[],
     scope: Scope = 'document',
   ): boolean {
+    if (!Object.hasOwn(getProfiles(settings), profile)) return false
     const ids = [...new Set([...reviewedIds, ...findings.map((f) => f.analyzerId)])]
     const sources: SavedReview['sources'] = []
     for (const id of ids) {
@@ -86,7 +98,7 @@ export class SavedReviews {
       sources.push({
         id,
         version: analyzer.version,
-        configurationHash: hash(canonical(effectiveConfig(settings, id))),
+        configurationHash: configurationHash(effectiveConfig(settings, id)),
       })
     }
     if (!sources.length || findings.length > 1000) return false
@@ -119,6 +131,7 @@ export class SavedReviews {
         message: finding.message,
         explanation: finding.explanation,
         replacement: finding.replacement,
+        replacements: finding.replacements,
         confidence: finding.confidence,
       }
       const validated = validateResult({ issues: [issue] })
@@ -139,6 +152,7 @@ export class SavedReviews {
       markdownHash,
       serializedHash,
       profile,
+      profileHash: hash(canonical(getProfiles(settings)[profile])),
       scope,
       analyzedAt: Date.now(),
       inputBudgets: inputBudgetsSchema.parse(settings.analysis),
@@ -164,6 +178,9 @@ export class SavedReviews {
       record.markdownHash !== markdownHash ||
       record.serializedHash !== serializedHash ||
       record.profile !== profile ||
+      (record.profileHash
+        ? record.profileHash !== hash(canonical(getProfiles(settings)[profile]))
+        : !Object.hasOwn(profiles, profile)) ||
       (!sameInputBudgets(record.inputBudgets ?? DEFAULT_INPUT_BUDGETS, settings.analysis) &&
         record.sources.some(
           (source) => this.analyzers.find((a) => a.id === source.id)?.engine === 'ai',
@@ -176,7 +193,7 @@ export class SavedReviews {
         !analyzer ||
         analyzer.version !== source.version ||
         !this.enabled(source.id, profile, settings) ||
-        source.configurationHash !== hash(canonical(effectiveConfig(settings, source.id)))
+        source.configurationHash !== configurationHash(effectiveConfig(settings, source.id))
       )
         return null
     }
@@ -268,11 +285,14 @@ export class SavedReviews {
     }))
   }
   export(): unknown {
-    return { version: 1, reviews: [...this.entries.values()] }
+    return { version: 2, reviews: [...this.entries.values()] }
   }
   import(raw: unknown) {
     const parsed = z
-      .object({ version: z.literal(1), reviews: z.array(reviewSchema).max(50) })
+      .object({
+        version: z.union([z.literal(1), z.literal(2)]),
+        reviews: z.array(reviewSchema).max(50),
+      })
       .safeParse(raw)
     if (!parsed.success)
       throw new Error('Saved reviews are incompatible or corrupt; they will not be restored.')
@@ -292,7 +312,11 @@ export class SavedReviews {
     this.prune()
   }
   private enabled(id: string, profile: ProfileId, settings: Settings) {
-    return (settings.analyzers[id]?.enabled ?? true) && profiles[profile].enabled.includes(id)
+    return (
+      analyzerEnabled(settings, id, profile) ||
+      (this.analyzers.some((a) => a.id === id && a.origin === 'custom') &&
+        globallyEnabled(settings, id))
+    )
   }
   private prune() {
     while (

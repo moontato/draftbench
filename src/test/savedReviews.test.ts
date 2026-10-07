@@ -10,7 +10,7 @@ import { readMarkdown, writeMarkdown } from '../documents/markdown'
 import { SavedReviews } from '../analyzers/savedReviews'
 import { analyzers, ambiguousReference } from '../analyzers/registry'
 import { engineMetadata } from '../analyzers/runner'
-import { defaultSettings, effectiveConfig } from '../settings/model'
+import { defaultSettings, effectiveConfig, configurationHash } from '../settings/model'
 
 const editors: Editor[] = []
 const settings = defaultSettings()
@@ -56,7 +56,7 @@ function prepare(markdown = raw, analyzerId = 'clarity') {
     analyzerId,
     analyzer.version,
     engineMetadata(analyzer, settings.ai),
-    hash(canonical(effectiveConfig(settings, analyzerId))),
+    configurationHash(effectiveConfig(settings, analyzerId)),
     dependencies,
   )!
   const store = new SavedReviews(analyzers)

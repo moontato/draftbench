@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { CheckCircle2, ExternalLink, LoaderCircle, LockKeyhole, X } from 'lucide-react'
-import { analyzers } from '../analyzers/registry'
+import { AnalyzerManager } from './AnalyzerManager'
+import { ProfileManager } from './ProfileManager'
+import { BackendManager } from './BackendManager'
+import { updateBackend } from './backendEditing'
+import { getProfiles } from '../profiles/profiles'
 import {
   AI_LIMITS,
   MAX_PARALLEL_JOBS,
   INPUT_BUDGET_LIMITS,
   inputBudgetsSchema,
   defaultSettings,
+  backendConfig,
   type Settings,
 } from './model'
 import { storage, errorMessage } from '../storage/desktop'
@@ -20,7 +25,7 @@ interface Props {
   onSave: (settings: Settings) => Promise<void>
   onClose: () => void
   onClearCache: () => void
-  onCredentialChange: () => void
+  onCredentialChange: (backendId?: string) => void | Promise<void>
   onWarning: (message: string) => void
 }
 export function SettingsDialog({
@@ -47,23 +52,36 @@ export function SettingsDialog({
     [changeKey, setChangeKey] = useState(false)
   useEffect(() => {
     void storage
-      .hasKey()
+      .hasKey(draft.backends.find((b) => b.id === draft.defaultBackend)?.credentialRef)
       .then(setHasKey)
       .catch(() => {})
-  }, [])
+    setKey('')
+    setChangeKey(false)
+  }, [draft.defaultBackend])
+  const currentAi =
+    draft.defaultBackend === 'default'
+      ? draft.ai
+      : draft.backends.find((b) => b.id === draft.defaultBackend)!
   const ai = <K extends keyof Settings['ai']>(field: K, value: Settings['ai'][K]) =>
-    setDraft((old) => ({ ...old, ai: { ...old.ai, [field]: value } }))
+    setDraft((old) => updateBackend(old, old.defaultBackend, { [field]: value }))
   const storeKey = async (): Promise<string> => {
     if (!changeKey) return ''
     let warning = ''
     try {
-      await storage.setKey(key)
+      await storage.setKey(
+        key,
+        draft.backends.find((b) => b.id === draft.defaultBackend)?.credentialRef,
+      )
     } catch (error) {
       warning = errorMessage(error)
     }
     setHasKey(!!key)
-    onCredentialChange()
-    ai('credentialGeneration', draft.ai.credentialGeneration + 1)
+    try {
+      await onCredentialChange(draft.defaultBackend)
+    } catch {
+      warning += ' Credential generation could not be persisted.'
+    }
+    ai('credentialGeneration', currentAi.credentialGeneration + 1)
     setChangeKey(false)
     setKey('')
     return warning
@@ -77,7 +95,10 @@ export function SettingsDialog({
     const controller = new AbortController()
     connection.current = controller
     try {
-      const response = await provider.testConnection(draft.ai, controller.signal)
+      const response = await provider.testConnection(
+        backendConfig(draft, draft.defaultBackend),
+        controller.signal,
+      )
       setModels(response.models)
       setResult(response.message + (warning ? ` ${warning}` : ''))
       setFailed(!!warning)
@@ -97,13 +118,11 @@ export function SettingsDialog({
     setSaving(true)
     const warning = await storeKey()
     try {
-      await onSave({
-        ...draft,
-        ai: {
-          ...draft.ai,
-          credentialGeneration: draft.ai.credentialGeneration + (changeKey ? 1 : 0),
-        },
-      })
+      await onSave(
+        updateBackend(draft, draft.defaultBackend, {
+          credentialGeneration: currentAi.credentialGeneration + (changeKey ? 1 : 0),
+        }),
+      )
       if (warning) onWarning(warning)
       onClose()
     } catch (error) {
@@ -142,15 +161,17 @@ export function SettingsDialog({
         </header>
         <div className="settings-body">
           <nav aria-label="Settings categories">
-            {['General', 'Editor', 'Analysis', 'AI'].map((name) => (
-              <button
-                key={name}
-                className={tab === name ? 'active' : ''}
-                onClick={() => setTab(name)}
-              >
-                {name}
-              </button>
-            ))}
+            {['General', 'Editor', 'Analysis', 'Analyzers', 'Profiles', 'AI', 'Backends'].map(
+              (name) => (
+                <button
+                  key={name}
+                  className={tab === name ? 'active' : ''}
+                  onClick={() => setTab(name)}
+                >
+                  {name}
+                </button>
+              ),
+            )}
             <div className="settings-nav-note">
               <LockKeyhole size={16} />
               <p>
@@ -172,10 +193,26 @@ export function SettingsDialog({
                   LAN, or your tailnet.
                 </p>
                 <label className="field">
+                  Default backend
+                  <select
+                    value={draft.defaultBackend}
+                    onChange={(e) => setDraft({ ...draft, defaultBackend: e.target.value })}
+                  >
+                    {draft.backends.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="text-button" onClick={() => setTab('Backends')}>
+                  Manage named backends
+                </button>
+                <label className="field">
                   Server URL
                   <input
                     autoFocus
-                    value={draft.ai.serverUrl}
+                    value={currentAi.serverUrl}
                     placeholder="http://localhost:8080"
                     onChange={(e) => ai('serverUrl', e.target.value)}
                   />
@@ -185,7 +222,7 @@ export function SettingsDialog({
                   Default Model ID
                   <input
                     list="discovered-models"
-                    value={draft.ai.model}
+                    value={currentAi.model}
                     placeholder="qwen3-8b"
                     onChange={(e) => ai('model', e.target.value)}
                   />
@@ -249,7 +286,7 @@ export function SettingsDialog({
                         type="number"
                         min="1"
                         max={AI_LIMITS.timeoutMs / 1000}
-                        value={draft.ai.timeoutMs / 1000}
+                        value={currentAi.timeoutMs / 1000}
                         onChange={(e) => ai('timeoutMs', Number(e.target.value) * 1000)}
                       />
                     </label>
@@ -260,7 +297,7 @@ export function SettingsDialog({
                         min="0"
                         max="2"
                         step="0.1"
-                        value={draft.ai.temperature}
+                        value={currentAi.temperature}
                         onChange={(e) => ai('temperature', Number(e.target.value))}
                       />
                     </label>
@@ -271,7 +308,7 @@ export function SettingsDialog({
                       type="number"
                       min="256"
                       max={AI_LIMITS.maxTokens}
-                      value={draft.ai.maxTokens}
+                      value={currentAi.maxTokens}
                       onChange={(e) => ai('maxTokens', Number(e.target.value))}
                     />
                   </label>
@@ -315,10 +352,10 @@ export function SettingsDialog({
                 </label>
                 <p className="muted">
                   Maximum simultaneous AI review requests, shared across reviewers and paragraphs.
-                  Parallel jobs are used only when all selected AI reviewers use the same server and
-                  model; mixed-model runs stay sequential. Start with 2 if your server supports
-                  parallel requests. More jobs can increase memory use; this does not configure
-                  server slots or download models.
+                  Migrated single-backend scheduling retains the one-model policy. With multiple
+                  named backends, requests share this global cap and each server's own limit.
+                  Configure per-backend limits and the legacy policy in Backends. More jobs can
+                  increase memory use; this does not configure server slots or download models.
                 </p>
                 <h3>Input budgets</h3>
                 <label className="field">
@@ -366,52 +403,7 @@ export function SettingsDialog({
                   context window or split long documents into sections. Budget changes clear active
                   AI findings; rerun analysis to reuse eligible cached results.
                 </p>
-                {analyzers.map((analyzer) => (
-                  <section className="analyzer-setting" key={analyzer.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={draft.analyzers[analyzer.id]?.enabled ?? true}
-                        onChange={(e) =>
-                          setDraft((old) => ({
-                            ...old,
-                            analyzers: {
-                              ...old.analyzers,
-                              [analyzer.id]: {
-                                model: old.analyzers[analyzer.id]?.model ?? '',
-                                enabled: e.target.checked,
-                              },
-                            },
-                          }))
-                        }
-                      />
-                      <strong>{analyzer.name}</strong>
-                      <span className="ai-tag">{analyzer.engine === 'ai' ? 'AI' : 'LOCAL'}</span>
-                    </label>
-                    <p>{analyzer.description}</p>
-                    {analyzer.engine === 'ai' && (
-                      <label className="field small-field">
-                        Model override
-                        <input
-                          value={draft.analyzers[analyzer.id]?.model ?? ''}
-                          placeholder={`Default · ${draft.ai.model}`}
-                          onChange={(e) =>
-                            setDraft((old) => ({
-                              ...old,
-                              analyzers: {
-                                ...old.analyzers,
-                                [analyzer.id]: {
-                                  enabled: old.analyzers[analyzer.id]?.enabled ?? true,
-                                  model: e.target.value,
-                                },
-                              },
-                            }))
-                          }
-                        />
-                      </label>
-                    )}
-                  </section>
-                ))}
+                <AnalyzerManager draft={draft} onChange={setDraft} />
                 <button className="secondary-button" onClick={onClearCache}>
                   Clear analysis cache
                 </button>
@@ -420,6 +412,18 @@ export function SettingsDialog({
                   caches may contain excerpts from your writing.
                 </p>
               </>
+            )}
+            {tab === 'Analyzers' && <AnalyzerManager draft={draft} onChange={setDraft} />}
+            {tab === 'Profiles' && <ProfileManager draft={draft} onChange={setDraft} />}
+            {tab === 'Backends' && (
+              <BackendManager
+                draft={draft}
+                onChange={setDraft}
+                provider={provider}
+                onCredentialChange={onCredentialChange}
+                onWarning={onWarning}
+                onBusyChange={setTesting}
+              />
             )}
             {tab === 'Editor' && (
               <>
@@ -482,10 +486,11 @@ export function SettingsDialog({
                       }))
                     }
                   >
-                    <option value="general">General prose</option>
-                    <option value="technical">Technical writing</option>
-                    <option value="essay">Essay</option>
-                    <option value="email">Professional email</option>
+                    {Object.entries(getProfiles(draft)).map(([id, p]) => (
+                      <option key={id} value={id}>
+                        {p.name}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <div className="privacy-note">

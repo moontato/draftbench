@@ -8,6 +8,7 @@ export interface NativeRequest {
   route: 'models' | 'chat/completions'
   body?: unknown
   timeoutMs: number
+  credentialRef?: string
 }
 export type Transport = (request: NativeRequest, signal?: AbortSignal) => Promise<unknown>
 const completionSchema = z.object({
@@ -102,7 +103,14 @@ export class OpenAICompatibleProvider implements AIProvider {
     if (route === 'chat/completions' && !config.model.trim())
       throw new ProviderError('configuration', 'Enter a default Model ID. Discovery is optional.')
     return this.transport(
-      { id: crypto.randomUUID(), serverUrl, route, body, timeoutMs: config.timeoutMs },
+      {
+        id: crypto.randomUUID(),
+        serverUrl,
+        route,
+        body,
+        timeoutMs: config.timeoutMs,
+        ...(config.credentialRef !== undefined ? { credentialRef: config.credentialRef } : {}),
+      },
       signal,
     )
   }

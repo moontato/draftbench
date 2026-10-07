@@ -27,6 +27,28 @@ pub struct HttpRequest {
     pub route: String,
     pub body: Option<Value>,
     pub timeout_ms: u64,
+    #[serde(default)]
+    pub credential_ref: Option<String>,
+}
+pub fn credential_reference(reference: Option<&str>) -> Result<String, NetworkError> {
+    let reference = reference.unwrap_or("openai-compatible");
+    let valid_backend = reference.strip_prefix("backend:").is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 64
+            && id.as_bytes()[0].is_ascii_lowercase()
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+    });
+    if reference.is_empty() || reference == "openai-compatible" || valid_backend {
+        Ok(reference.into())
+    } else {
+        Err(NetworkError::new(
+            "configuration",
+            "Invalid backend credential reference.",
+            None,
+        ))
+    }
 }
 
 fn request_timeout(timeout_ms: u64) -> Duration {
@@ -182,6 +204,24 @@ fn classify_transport(error: reqwest::Error) -> NetworkError {
 mod tests {
     use super::*;
     #[test]
+    fn credential_slots_preserve_legacy_but_isolate_backends() {
+        assert_eq!(credential_reference(None).unwrap(), "openai-compatible");
+        assert_eq!(
+            credential_reference(Some("backend:gpu-1")).unwrap(),
+            "backend:gpu-1"
+        );
+        assert_eq!(credential_reference(Some("")).unwrap(), "");
+        for value in [
+            "another-account",
+            "backend:../secret",
+            "backend:",
+            "backend:UPPER",
+            "backend:bad\n",
+        ] {
+            assert!(credential_reference(Some(value)).is_err());
+        }
+    }
+    #[test]
     fn timeout_supports_thirty_minutes() {
         assert_eq!(request_timeout(1_800_000), Duration::from_secs(1800));
         assert_eq!(request_timeout(900_000), Duration::from_secs(900));
@@ -235,6 +275,7 @@ mod tests {
             route: "models".into(),
             body: None,
             timeout_ms: 1000,
+            credential_ref: None,
         }
     }
     #[tokio::test]

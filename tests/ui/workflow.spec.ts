@@ -43,7 +43,11 @@ async function installDesktopFixture(
         failReviews: boolean | string
         pauseReviews: boolean
         reviewDelayMs: number
-        reviewConcurrency: { active: number; peak: number }
+        reviewConcurrency: {
+          active: number
+          peak: number
+          byServer: Record<string, { active: number; peak: number; requests: number }>
+        }
         readonly recentProjects: typeof recentProjects
       }
     }
@@ -55,7 +59,7 @@ async function installDesktopFixture(
       failReviews: false,
       pauseReviews: false,
       reviewDelayMs: 0,
-      reviewConcurrency: { active: 0, peak: 0 },
+      reviewConcurrency: { active: 0, peak: 0, byServer: {} },
       get settings() {
         return savedSettings
       },
@@ -142,12 +146,32 @@ async function installDesktopFixture(
           metadata[String(args.name)] = args.value
           return
         }
+        if (command === 'harper_review') {
+          const text = String(args.text),
+            offset = text.indexOf('could of')
+          return offset < 0
+            ? []
+            : [
+                {
+                  offset,
+                  quote: 'could of',
+                  category: 'harper-grammar',
+                  severity: 'warning',
+                  message: 'Use could have.',
+                  explanation: 'Could of is not the intended verb phrase.',
+                  replacement: 'could have',
+                  replacements: ['could have', "could've"],
+                  confidence: 1,
+                },
+              ]
+        }
         if (command === 'has_api_key') return false
         if (command === 'set_api_key') throw 'OS credential store unavailable; key is session-only.'
         if (command === 'ai_http') {
           const request = args.request as {
             id: string
             route: string
+            serverUrl: string
             body: { model: string; messages: { content: string }[] }
           }
           if (request.route === 'models')
@@ -163,6 +187,14 @@ async function installDesktopFixture(
           const concurrency = testWindow.fixture.reviewConcurrency
           concurrency.active++
           concurrency.peak = Math.max(concurrency.peak, concurrency.active)
+          const resource = (concurrency.byServer[request.serverUrl] ??= {
+            active: 0,
+            peak: 0,
+            requests: 0,
+          })
+          resource.active++
+          resource.requests++
+          resource.peak = Math.max(resource.peak, resource.active)
           try {
             if (testWindow.fixture.pauseReviews)
               await new Promise<void>((_resolve, reject) => {
@@ -205,6 +237,7 @@ async function installDesktopFixture(
             }
           } finally {
             concurrency.active--
+            resource.active--
           }
         }
         return 1
@@ -948,7 +981,7 @@ test('parallel jobs persist, bound full-review requests, reuse cache, and preser
           }
         ).fixture.reviewConcurrency,
     ),
-  ).toEqual({ active: 0, peak: 3 })
+  ).toMatchObject({ active: 0, peak: 3 })
   await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
   await expect(page.locator('.history-run')).toHaveCount(1)
   await expect(page.locator('.history-summary')).toContainText('Up to 3 parallel AI jobs')
@@ -1014,7 +1047,7 @@ test('parallel jobs persist, bound full-review requests, reuse cache, and preser
           }
         ).fixture.reviewConcurrency,
     ),
-  ).toEqual({ active: 0, peak: 1 })
+  ).toMatchObject({ active: 0, peak: 1 })
   await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
   await expect(page.locator('.history-summary').first()).toContainText('Sequential')
 })
@@ -1291,6 +1324,259 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   )
   await expect(reopened.getByLabel('Document input budget (characters)')).toHaveValue('48000')
   await reopened.close()
+})
+
+test('v0.2 creates a reviewer/profile, routes two backends with bounded overlap, and restores reviews across restart', async ({
+  page,
+  context,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Backends', exact: true }).click()
+  await page.getByLabel('Backend name', { exact: true }).fill('Local Fast')
+  await page.getByLabel('Backend default model').fill('fast-model')
+  await page.getByLabel('Global AI concurrency').selectOption('4')
+  await page.getByRole('button', { name: 'Add backend', exact: true }).click()
+  await page.getByLabel('Backend name', { exact: true }).fill('GPU Box')
+  await page.getByLabel('Backend server URL').fill('http://100.80.40.20:8080')
+  await page.getByLabel('Backend default model').fill('gpu-model')
+  await page.getByRole('button', { name: 'Test backend connection', exact: true }).click()
+  await expect(page.getByText(/Model “gpu-model” accepted a completion/)).toBeVisible()
+  const gpuId = await page
+    .getByLabel('Default backend')
+    .getByRole('option', { name: 'GPU Box' })
+    .getAttribute('value')
+  await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await page
+    .getByRole('region', { name: 'Ambiguous reference analyzer settings', exact: true })
+    .getByLabel('Backend', { exact: true })
+    .selectOption(gpuId!)
+  await page.getByRole('button', { name: 'Create custom analyzer' }).click()
+  await page.getByLabel('Analyzer ID', { exact: true }).fill('buried-request')
+  await page.getByLabel('Analyzer name', { exact: true }).fill('Buried Request')
+  await page.getByLabel('Analyzer description').fill('Flags hidden requests in email.')
+  await page
+    .getByLabel('Instructions', { exact: true })
+    .fill(
+      'Flag emails where the main request is difficult to identify. Only report meaningful reader difficulty. Do not rewrite the entire email.',
+    )
+  await page.getByRole('button', { name: 'Keep analyzer changes' }).click()
+  const custom = page.getByRole('region', { name: 'Buried Request analyzer settings', exact: true })
+  await custom.getByLabel('Backend', { exact: true }).selectOption(gpuId!)
+  await custom.getByLabel('Model override', { exact: true }).fill('gpu-custom-model')
+  await page
+    .getByRole('region', { name: 'Harper analyzer settings', exact: true })
+    .getByRole('checkbox')
+    .check()
+  await page.getByRole('button', { name: 'Profiles', exact: true }).click()
+  await page.getByRole('button', { name: 'Create custom profile' }).click()
+  await page.getByLabel('Profile ID', { exact: true }).fill('work-email')
+  await page.getByLabel('Profile name', { exact: true }).fill('Work Email')
+  const membership = page.getByRole('group', { name: 'Enabled analyzers in this profile' })
+  for (const name of ['Harper', 'Clarity', 'Buried Request', 'Ambiguous reference'])
+    await membership.getByRole('checkbox', { name, exact: true }).check()
+  await page.getByRole('button', { name: 'Keep profile changes' }).click()
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click()
+  await page.getByLabel('Writing profile').selectOption('work-email')
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { reviewDelayMs: number } }).fixture.reviewDelayMs = 140
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('3 findings')
+  const stats = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: {
+            reviewConcurrency: {
+              peak: number
+              byServer: Record<string, { peak: number; active: number }>
+            }
+          }
+        }
+      ).fixture.reviewConcurrency,
+  )
+  expect(stats.peak).toBe(4)
+  expect(
+    Object.values(stats.byServer)
+      .map((s) => s.peak)
+      .sort(),
+  ).toEqual([2, 2])
+  expect(Object.values(stats.byServer).every((s) => s.active === 0)).toBe(true)
+  const customGroup = page
+    .locator('.finding-group')
+    .filter({ has: page.getByRole('heading', { name: /^Buried Request/ }) })
+  await customGroup.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await page.getByRole('button', { name: /Analyzer & engine/ }).click()
+  await expect(page.locator('.engine-details')).toContainText('GPU Box')
+  await expect(page.locator('.engine-details')).toContainText('gpu-custom-model')
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Analysis history' })).toContainText('Work Email')
+  await expect(page.getByRole('dialog', { name: 'Analysis history' })).toContainText(
+    'Backend: GPU Box',
+  )
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  const seed = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        fixture: {
+          files: Record<string, string>
+          metadata: Record<string, unknown>
+          settings: unknown
+        }
+      }
+    ).fixture
+    return { files: fixture.files, metadata: fixture.metadata, settings: fixture.settings }
+  })
+  const reopened = await context.newPage()
+  await installDesktopFixture(reopened, seed)
+  await reopened.goto('/')
+  await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
+  await reopened.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(reopened.getByLabel('Writing profile')).toHaveValue('work-email')
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await expect(
+    reopened.getByRole('button', { name: /Unclear referent hides the point/ }),
+  ).toHaveCount(3)
+  await reopened
+    .getByRole('button', { name: /Unclear referent hides the point/ })
+    .last()
+    .click()
+  await reopened.getByRole('button', { name: 'Apply suggestion', exact: true }).click()
+  await expect(reopened.locator('.tiptap')).toContainText('The proposal is unclear.')
+  await reopened.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(reopened.locator('.tiptap')).toContainText('This is unclear.')
+  expect(
+    await reopened.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+  await reopened.close()
+})
+
+test('Harper findings share inline review, suggestion choice and normal Undo/Redo without AI or code linting', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    files: {
+      'essay.md':
+        'She **could of** finished the report.\n\n```text\nShe could of finished in code.\n```\n',
+    },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await page
+    .getByRole('region', { name: 'Harper analyzer settings', exact: true })
+    .getByRole('checkbox')
+    .check()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.getByRole('button', { name: /Use could have/ })).toHaveCount(1)
+  await expect(page.locator('.diagnostic')).toHaveCount(1)
+  await page.getByRole('button', { name: /Use could have/ }).click()
+  await page.getByLabel('Suggested replacement').selectOption('1')
+  await page.getByRole('button', { name: 'Apply suggestion', exact: true }).click()
+  await expect(page.locator('.tiptap strong')).toContainText("could've")
+  await expect(page.locator('.tiptap pre')).toContainText('could of')
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(page.locator('.tiptap strong')).toContainText('could of')
+  await page.getByRole('button', { name: 'Redo', exact: true }).click()
+  await expect(page.locator('.tiptap strong')).toContainText("could've")
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+})
+
+test('custom reviewer validation, duplication, editing/deletion, and corrupt entry recovery are isolated', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    settings: {
+      version: 2,
+      customAnalyzers: [
+        {
+          id: 'good-reviewer',
+          name: 'Good Reviewer',
+          description: '',
+          enabled: true,
+          scope: 'document',
+          instructions: 'Report only unclear actions.',
+          severity: 'warning',
+        },
+        { id: 'bad-reviewer', name: 'Bad Reviewer', scope: 'execute-code', instructions: '' },
+      ],
+    },
+  })
+  await page.goto('/')
+  await expect(page.locator('.notice')).toContainText('isolated')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await expect(
+    page.getByRole('region', { name: 'Good Reviewer analyzer settings', exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('region', { name: 'Bad Reviewer analyzer settings', exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole('button', { name: 'Create custom analyzer' }).click()
+  await page.getByLabel('Analyzer ID', { exact: true }).fill('clarity')
+  await page.getByLabel('Analyzer name', { exact: true }).fill('Duplicate ID')
+  await page.getByLabel('Instructions', { exact: true }).fill('Find unclear writing.')
+  await page.getByRole('button', { name: 'Keep analyzer changes' }).click()
+  await expect(page.getByText('That analyzer ID already exists.')).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel analyzer edit' }).click()
+  await page.getByRole('button', { name: 'Duplicate Good Reviewer', exact: true }).click()
+  await expect(page.getByLabel('Instructions', { exact: true })).toHaveValue(
+    'Report only unclear actions.',
+  )
+  await page.getByLabel('Analyzer name', { exact: true }).fill('Copied Reviewer')
+  await page.getByRole('button', { name: 'Keep analyzer changes' }).click()
+  await page.getByRole('button', { name: 'Edit Copied Reviewer', exact: true }).click()
+  await expect(page.getByLabel('Analyzer ID', { exact: true })).toBeDisabled()
+  await page.getByLabel('Analyzer name', { exact: true }).fill('Renamed Reviewer')
+  await page.getByRole('button', { name: 'Keep analyzer changes' }).click()
+  await page.getByRole('button', { name: 'Delete Renamed Reviewer', exact: true }).click()
+  await expect(
+    page.getByRole('region', { name: 'Renamed Reviewer analyzer settings', exact: true }),
+  ).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Delete Clarity', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Profiles', exact: true }).click()
+  await page.getByRole('button', { name: 'Duplicate Professional email', exact: true }).click()
+  await page.getByLabel('Profile name', { exact: true }).fill('My Email')
+  await page.getByRole('button', { name: 'Keep profile changes' }).click()
+  await page.getByRole('button', { name: 'Edit My Email', exact: true }).click()
+  await page.getByLabel('Profile name', { exact: true }).fill('Renamed Email')
+  await page.getByRole('button', { name: 'Keep profile changes' }).click()
+  await page.getByRole('button', { name: 'Delete Renamed Email', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: 'Delete Professional email', exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click()
+  const saved = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: { settings: { customAnalyzers: { id: string }[]; customProfiles: unknown[] } }
+        }
+      ).fixture.settings,
+  )
+  expect(saved.customAnalyzers.map((a) => a.id)).toEqual(['good-reviewer'])
+  expect(saved.customProfiles).toEqual([])
 })
 
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {

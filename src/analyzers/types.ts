@@ -25,7 +25,10 @@ export interface Analyzer {
   name: string
   description: string
   engine: 'deterministic' | 'ai'
-  preferredScope: 'paragraph' | 'nearby' | 'document'
+  preferredScope: 'paragraph' | 'nearby' | 'selection' | 'document'
+  origin?: 'builtin' | 'custom'
+  engineName?: string
+  instructions?: string
   scopes: Scope[]
   analyze(context: AnalyzerContext): Promise<AnalyzerResult>
 }

@@ -1,4 +1,7 @@
 import { repeatedWord } from './builtin/repeatedWord'
+import { harper } from './builtin/harper'
+import { customAnalyzer } from './llm/custom'
+import type { Settings } from '../settings/model'
 import { clarity, semanticAnalyzer } from './llm/semantic'
 export const ambiguousReference = semanticAnalyzer(
   {
@@ -31,4 +34,7 @@ export const structure = semanticAnalyzer(
   },
   'Review paragraph and document organization: paragraphs with no clear function, disconnected material, unclear transitions, conclusions introducing a major new argument, or promised topics not addressed. Do not prescribe a formulaic outline. Quote a single affected block and describe the structural issue. Leave replacement null for cross-paragraph or document-wide changes. Use category structure.',
 )
-export const analyzers = [repeatedWord, clarity, ambiguousReference, redundancy, structure]
+export const analyzers = [repeatedWord, clarity, ambiguousReference, redundancy, structure, harper]
+export function createAnalyzerRegistry(settings: Settings) {
+  return [...analyzers, ...settings.customAnalyzers.map(customAnalyzer)]
+}

@@ -184,6 +184,6 @@ describe('document analysis history', () => {
     const imported = new AnalysisHistory()
     imported.import(raw)
     expect((imported.export() as { runs: unknown[] }).runs).toHaveLength(1)
-    expect(() => imported.import({ version: 2, runs: [] })).toThrow('corrupt')
+    expect(() => imported.import({ version: 3, runs: [] })).toThrow('corrupt')
   })
 })

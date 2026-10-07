@@ -28,6 +28,7 @@ const issueSchema = z.object({
   explanation: safeString(2000),
   replacement: safeString(16000, 0).nullable().optional(),
   confidence: z.number().min(0).max(1).nullable().optional(),
+  replacements: z.array(safeString(16000, 0)).max(8).optional(),
 })
 export function validateResult(raw: unknown): AnalyzerResult {
   const envelope = z.object({ issues: z.array(z.unknown()).max(12) }).safeParse(raw)
@@ -97,6 +98,8 @@ export const clarity: Analyzer = {
   scopes: ['selection', 'block', 'document'],
   description:
     'Genuinely difficult, indirect, dense, or confusing passages—not long sentences alone.',
+  instructions:
+    'Review clarity: report confusing relationships, difficult syntax, indirect meaning, or unexplained conceptual density. Length alone is not a problem. Use category clarity.',
   async analyze({ unit, config, provider, signal }) {
     const raw = await provider.completeStructured(
       {
@@ -122,6 +125,7 @@ export function semanticAnalyzer(
     ...options,
     version: '1.1',
     engine: 'ai',
+    instructions: instruction,
     async analyze({ unit, config, provider, signal }) {
       return validateResult(
         await provider.completeStructured(

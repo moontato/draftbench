@@ -27,6 +27,7 @@ def webdriver(method, route, data=None):
 
 review_lock = threading.Lock()
 review_stats = {'active': 0, 'peak': 0, 'requests': 0}
+by_server = {}
 
 class MockServer(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -37,7 +38,12 @@ class MockServer(BaseHTTPRequestHandler):
         assert self.path == '/v1/chat/completions'
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert data['model'] == 'mock-reviewer'
+        assert self.headers.get('Authorization') == getattr(self.server, 'authorization', None)
         with review_lock:
+            stats = by_server.setdefault(self.server.server_port, {'active': 0, 'peak': 0, 'requests': 0})
+            stats['active'] += 1
+            stats['requests'] += 1
+            stats['peak'] = max(stats['peak'], stats['active'])
             review_stats['active'] += 1
             review_stats['requests'] += 1
             review_stats['peak'] = max(review_stats['peak'], review_stats['active'])
@@ -48,11 +54,14 @@ class MockServer(BaseHTTPRequestHandler):
         finally:
             with review_lock:
                 review_stats['active'] -= 1
+                stats['active'] -= 1
     def log_message(self, *args):
         pass
 
 server = ThreadingHTTPServer(('127.0.0.1', 0), MockServer)
 threading.Thread(target=server.serve_forever, daemon=True).start()
+second_server = ThreadingHTTPServer(('127.0.0.1', 0), MockServer)
+threading.Thread(target=second_server.serve_forever, daemon=True).start()
 session = None
 try:
     value = webdriver('POST', '/session', {'capabilities': {'alwaysMatch': {'tauri:options': {'application': BINARY}}}})
@@ -164,10 +173,95 @@ try:
         assert '19 cached reviews' in status, status
         with review_lock:
             assert review_stats['requests'] == 13, review_stats
+        # v0.2: two actual native servers, isolated ephemeral keys, custom reviewers/profile.
+        v2 = invoke('load_settings')['value']
+        assert v2['version'] == 2, v2  # Clean legacy settings migrated automatically.
+        v2['analysis']['legacySingleModel'] = False
+        v2['analysis']['parallelJobs'] = 3
+        second_endpoint = 'http://127.0.0.1:' + str(second_server.server_port)
+        v2['backends'] += [dict(v2['ai'], id='native-first', name='Native First', credentialRef='backend:native-first', parallelJobs=1),
+                           dict(v2['ai'], id='native-second', name='Native Second', serverUrl=second_endpoint, credentialRef='backend:native-second', parallelJobs=2)]
+        v2['customAnalyzers'] = [dict(id=identifier, name=identifier, description='Native protocol fixture.', enabled=True, scope='paragraph', severity='suggestion', instructions='Review this fixture and return no findings.') for identifier in ['native-review-a', 'native-review-b']]
+        v2['analyzers']['native-review-a'] = dict(enabled=True, model='', backend='native-first')
+        v2['analyzers']['native-review-b'] = dict(enabled=True, model='', backend='native-second')
+        v2['customProfiles'] = [dict(id='native-profile', name='Native profile', description='', enabled=['native-review-a', 'native-review-b']),
+                                dict(id='grammar-profile', name='Grammar profile', description='', enabled=['harper'])]
+        assert invoke('save_settings', {'value': v2})['ok']
+        def restart_and_open(filename):
+            global session, route
+            webdriver('DELETE', '/session/' + session)
+            session = None
+            value = webdriver('POST', '/session', {'capabilities': {'alwaysMatch': {'tauri:options': {'application': BINARY}}}})
+            session = value['sessionId']; route = '/session/' + session
+            webdriver('POST', route + '/timeouts', {'script': 120000})
+            for _ in range(60):
+                if script('return !!document.querySelector(".recent-project-open")'): break
+                time.sleep(.1)
+            script('document.querySelector(".recent-project-open").click()')
+            for _ in range(60):
+                if script('return [...document.querySelectorAll("button")].some(b => b.textContent.trim() === ' + json.dumps(filename) + ')'): break
+                time.sleep(.1)
+            script('const b = [...document.querySelectorAll("button")].find(b => b.textContent.trim() === ' + json.dumps(filename) + '); b.click()')
+            for _ in range(60):
+                if script('return !!document.querySelector(`[aria-label="Document writing editor"]`)'): break
+                time.sleep(.1)
+            assert script('return !!document.querySelector(`[aria-label="Document writing editor"]`)')
+        def select_profile(identifier):
+            script('const s = document.querySelector(`[aria-label="Writing profile"]`); s.value = ' + json.dumps(identifier) + '; s.dispatchEvent(new Event("change", {bubbles:true}))')
+            assert script('return document.querySelector(`[aria-label="Writing profile"]`).value') == identifier
+        def analyze():
+            script('const b = [...document.querySelectorAll("footer button")].find(b => b.textContent.includes("Analyze document")); b.click()')
+            for _ in range(100):
+                status = script('return document.querySelector(".analysis-status")?.textContent || ""')
+                if 'findings' in status and 'cached reviews' in status: return status
+                time.sleep(.1)
+            raise AssertionError(status)
+        restart_and_open('reopen')
+        assert invoke('use_session_key', {'key': 'native-first-key', 'credentialRef': 'backend:native-first'})['ok']
+        assert invoke('use_session_key', {'key': 'native-second-key', 'credentialRef': 'backend:native-second'})['ok']
+        server.authorization = 'Bearer native-first-key'
+        second_server.authorization = 'Bearer native-second-key'
+        select_profile('native-profile')
+        with review_lock:
+            review_stats.update(active=0, peak=0, requests=0)
+            by_server.clear()
+        status = analyze()
+        assert '0 findings' in status and 'warnings' not in status, status
+        with review_lock:
+            assert review_stats == {'active': 0, 'peak': 3, 'requests': 12}, review_stats
+            assert by_server[server.server_port] == {'active': 0, 'peak': 1, 'requests': 6}, by_server
+            assert by_server[second_server.server_port] == {'active': 0, 'peak': 2, 'requests': 6}, by_server
+        assert '12 cached reviews' in analyze()
+        with review_lock: assert review_stats['requests'] == 12
+        # Real embedded Harper IPC, UTF-16 mapping, then real UI/mark-preserving Apply/Undo.
+        grammar_text = '😀 They has a plan.'
+        grammar = invoke('harper_review', {'text': grammar_text})
+        assert grammar['ok'] and grammar['value'], grammar
+        for finding in grammar['value']:
+            width = len(finding['quote'].encode('utf-16-le'))
+            assert grammar_text.encode('utf-16-le')[finding['offset']*2:finding['offset']*2+width].decode('utf-16-le') == finding['quote'], finding
+        assert any('have' in f['replacements'] for f in grammar['value']), grammar
+        v2['analyzers']['harper']['enabled'] = True
+        assert invoke('save_settings', {'value': v2})['ok']
+        grammar_source = '# Grammar fixture\n\n😀 They **has** a plan.\n\n```text\nThey has a plan.\n```\n'
+        assert invoke('save_document', {'path': 'grammar.md', 'content': grammar_source, 'expectedHash': None})['ok']
+        restart_and_open('grammar')
+        select_profile('grammar-profile')
+        status = analyze()
+        assert 'warnings' not in status, status
+        assert script('const b = [...document.querySelectorAll(".finding-card")].find(b => b.textContent.includes("“has”")); if (!b) return false; b.click(); return true')
+        assert script('const b = [...document.querySelectorAll(".fix-inspector button")].find(b => b.textContent.includes("Apply suggestion")); if (!b || b.disabled) return false; b.click(); return true')
+        assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'have'
+        assert script('return document.querySelector(".ProseMirror pre")?.textContent') == 'They has a plan.'
+        script('document.querySelector(`button[title="Undo"]`).click()')
+        assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'has'
+        with review_lock: assert review_stats['requests'] == 12  # No HTTP during offline review/fix.
         assert invoke('remove_recent_project', {'path': canonical})['value'] == []
         assert Path(directory, 'reopen.md').read_text() == long_source
-        print('PASS: real bundled desktop UI, IPC, recent projects across app restart/direct reopen (deduplication/failure/removal), local Markdown CRUD, conflict protection, path boundary, and configurable long-input budgets and bounded parallel review/cache reuse through native HTTP (mock compatible server).')
+        assert Path(directory, 'grammar.md').read_text() == grammar_source
+        print('PASS: real bundled WebKit/IPC, Markdown CRUD/conflicts/paths, persistent recents, v1→v2 migration, long-input budgets/cache, custom reviewers/profile across two native servers (global peak 3; backend peaks 1/2; isolated keys), and embedded Harper Unicode/code exclusion/mark-preserving Apply/Undo with no HTTP.')
 finally:
     if session:
         webdriver('DELETE', '/session/' + session)
     server.shutdown()
+    second_server.shutdown()

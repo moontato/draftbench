@@ -13,5 +13,5 @@
     "resolveJsonModule": true,
     "types": ["vite/client", "vitest/globals"]
   },
-  "include": ["src", "vite.config.ts", "playwright.config.ts", "tests/ui"]
+  "include": ["src", "vite.config.ts", "playwright.config.ts", "tests/ui", "scripts/*.ts"]
 }

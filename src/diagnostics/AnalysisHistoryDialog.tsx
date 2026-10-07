@@ -70,7 +70,8 @@ export function AnalysisHistoryDialog({
                     </span>
                   </div>
                   <p className="history-summary">
-                    {scopeLabels[run.scope]} · {profiles[run.profile].name} ·{' '}
+                    {scopeLabels[run.scope]} ·{' '}
+                    {run.profileName ?? profiles[run.profile]?.name ?? run.profile} ·{' '}
                     {run.reviewers.reduce((n, r) => n + r.findings, 0)}{' '}
                     {run.origin === 'saved-review' ? 'saved findings' : 'findings'}
                     {run.force ? ' · Force rerun' : ''}
@@ -118,6 +119,14 @@ export function AnalysisHistoryDialog({
                               : 'Engine not recorded'}{' '}
                           · analyzer v{reviewer.version}
                         </p>
+                        {reviewer.backend && (
+                          <p className="history-endpoint">
+                            Backend: {reviewer.backend}
+                            {reviewer.parallelJobs
+                              ? ` · up to ${reviewer.parallelJobs} jobs on this server`
+                              : ''}
+                          </p>
+                        )}
                         {reviewer.server && <p className="history-endpoint">{reviewer.server}</p>}
                         {['completed', 'warnings', 'stale'].includes(reviewer.status) ? (
                           <p>

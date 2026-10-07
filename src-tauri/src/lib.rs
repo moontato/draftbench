@@ -1,3 +1,4 @@
+mod grammar;
 mod network;
 mod recent_projects;
 mod storage;
@@ -11,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 struct DesktopState {
     root: Mutex<Option<PathBuf>>,
-    session_key: Mutex<Option<String>>,
+    session_keys: Mutex<HashMap<String, String>>,
     requests: Mutex<HashMap<String, CancellationToken>>,
     recent_projects: Mutex<()>,
 }
@@ -209,14 +210,27 @@ fn save_settings(value: Value, app: tauri::AppHandle) -> Result<(), String> {
         &serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
     )
 }
-fn credential() -> Result<keyring::Entry, String> {
-    keyring::Entry::new("org.draftbench.desktop", "openai-compatible")
+fn credential(reference: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new("org.draftbench.desktop", reference)
         .map_err(|_| "OS credential store unavailable; key is session-only.".into())
 }
 #[tauri::command]
-fn set_api_key(key: String, state: State<DesktopState>) -> Result<(), String> {
-    *state.session_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
-    let entry = credential()?;
+fn set_api_key(
+    key: String,
+    credential_ref: Option<String>,
+    state: State<DesktopState>,
+) -> Result<(), String> {
+    let reference =
+        network::credential_reference(credential_ref.as_deref()).map_err(|e| e.message)?;
+    if reference.is_empty() {
+        return Err("Choose a backend credential slot.".into());
+    }
+    state
+        .session_keys
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(reference.clone(), key.clone());
+    let entry = credential(&reference)?;
     if key.is_empty() {
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -231,36 +245,65 @@ fn set_api_key(key: String, state: State<DesktopState>) -> Result<(), String> {
 // Explicit ephemeral override, including an empty key for unauthenticated sessions.
 // This does not read or modify any OS credential.
 #[tauri::command]
-fn use_session_key(key: String, state: State<DesktopState>) -> Result<(), String> {
-    *state.session_key.lock().map_err(|e| e.to_string())? = Some(key);
+fn use_session_key(
+    key: String,
+    credential_ref: Option<String>,
+    state: State<DesktopState>,
+) -> Result<(), String> {
+    let reference =
+        network::credential_reference(credential_ref.as_deref()).map_err(|e| e.message)?;
+    state
+        .session_keys
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(reference, key);
     Ok(())
 }
 #[tauri::command]
-fn has_api_key(state: State<DesktopState>) -> bool {
-    if let Ok(key) = state.session_key.lock() {
-        if let Some(key) = key.as_ref() {
+fn has_api_key(credential_ref: Option<String>, state: State<DesktopState>) -> bool {
+    let Ok(reference) = network::credential_reference(credential_ref.as_deref()) else {
+        return false;
+    };
+    if reference.is_empty() {
+        return false;
+    }
+    if let Ok(keys) = state.session_keys.lock() {
+        if let Some(key) = keys.get(&reference) {
             return !key.is_empty();
         }
     }
-    credential()
+    credential(&reference)
         .and_then(|entry| entry.get_password().map_err(|e| e.to_string()))
         .is_ok()
+}
+#[tauri::command]
+async fn harper_review(text: String) -> Result<Vec<grammar::Finding>, String> {
+    tauri::async_runtime::spawn_blocking(move || grammar::review(&text))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn ai_http(
     request: network::HttpRequest,
     state: State<'_, DesktopState>,
 ) -> Result<Value, network::NetworkError> {
+    let reference = network::credential_reference(request.credential_ref.as_deref())?;
     let cancel = {
         let mut requests = state.requests.lock().unwrap();
         requests.entry(request.id.clone()).or_default().clone()
     };
-    let key = state
-        .session_key
-        .lock()
-        .unwrap()
-        .clone()
-        .or_else(|| credential().ok()?.get_password().ok());
+    // An explicit backend slot never falls back to another backend's key.
+    let key = if reference.is_empty() {
+        None
+    } else {
+        state
+            .session_keys
+            .lock()
+            .unwrap()
+            .get(&reference)
+            .cloned()
+            .or_else(|| credential(&reference).ok()?.get_password().ok())
+    };
     let result = network::execute(&request, key, cancel).await;
     state.requests.lock().unwrap().remove(&request.id);
     result
@@ -295,6 +338,7 @@ pub fn run() {
             use_session_key,
             has_api_key,
             ai_http,
+            harper_review,
             cancel_request
         ])
         .run(tauri::generate_context!())

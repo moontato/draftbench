@@ -38,6 +38,8 @@ export function ProblemsPanel(props: Props) {
     [group, setGroup] = useState('analyzer'),
     [showDismissed, setShowDismissed] = useState(false)
   const [engineOpen, setEngineOpen] = useState(false)
+  const [alternative, setAlternative] = useState(0)
+  useEffect(() => setAlternative(0), [props.selected])
   const [collapsed, setCollapsed] = useState(false)
   const reviewId = useId()
   const { areaRef, height, separatorProps } = useReviewResize()
@@ -68,7 +70,10 @@ export function ProblemsPanel(props: Props) {
     }
     return [...result]
   }, [visible, group, props.analyzers])
-  const chosen = props.findings.find((f) => f.id === props.selected)
+  const original = props.findings.find((f) => f.id === props.selected)
+  const chosen = original?.replacements?.length
+    ? { ...original, replacement: original.replacements[alternative] ?? original.replacements[0] }
+    : original
   return (
     <aside className="analysis-pane" aria-label="Document analysis">
       <div className="pane-heading">
@@ -238,6 +243,21 @@ export function ProblemsPanel(props: Props) {
             </div>
             <div className="inspector-body" id={reviewId} hidden={collapsed}>
               <p>{chosen.explanation}</p>
+              {chosen.replacements && chosen.replacements.length > 1 && (
+                <label className="field">
+                  Suggested replacement
+                  <select
+                    value={alternative}
+                    onChange={(e) => setAlternative(Number(e.target.value))}
+                  >
+                    {chosen.replacements.map((replacement, index) => (
+                      <option key={index} value={index}>
+                        {replacement || 'Remove quoted text'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {chosen.replacement !== undefined && (
                 <>
                   <span className="eyebrow">ORIGINAL</span>
@@ -271,6 +291,12 @@ export function ProblemsPanel(props: Props) {
                   </dd>
                   <dt>Engine</dt>
                   <dd>{chosen.engine.name}</dd>
+                  {chosen.engine.backend && (
+                    <>
+                      <dt>Backend</dt>
+                      <dd>{chosen.engine.backend}</dd>
+                    </>
+                  )}
                   {chosen.engine.model && (
                     <>
                       <dt>Model</dt>
@@ -284,7 +310,10 @@ export function ProblemsPanel(props: Props) {
                       <dt>Confidence</dt>
                       <dd>
                         {Math.round(chosen.confidence * 100)}% (
-                        {chosen.engine.kind === 'ai' ? 'model estimate' : 'rule confidence'})
+                        {chosen.engine.kind === 'ai'
+                          ? 'model estimate'
+                          : 'deterministic rule match'}
+                        )
                       </dd>
                     </>
                   )}

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { canonical, hash } from '../diagnostics/hash'
-import type { EffectiveConfig } from '../settings/model'
+import { inferenceConfig, type EffectiveConfig } from '../settings/model'
 import type { Issue } from '../diagnostics/types'
 import type { AnalysisUnit, Analyzer, AnalyzerResult } from './types'
 import { validateResult } from './llm/semantic'
@@ -16,7 +16,7 @@ export class AnalysisCache {
       canonical({
         analyzer: analyzer.id,
         version: analyzer.version,
-        config,
+        config: inferenceConfig(config),
         targets: unit.targets.map((b) => [
           b.type,
           b.headingLevel ?? null,
@@ -60,6 +60,7 @@ export class AnalysisCache {
           message: i.message,
           explanation: i.explanation,
           replacement: i.replacement,
+          replacements: i.replacements,
           confidence: i.confidence,
           offset: i.offset,
         }))

@@ -4,7 +4,7 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.1.5 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.0 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
 ## What works
 
@@ -17,8 +17,11 @@ Draftbench v0.1.5 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMi
 - Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
 - **Clarity**, **Ambiguous reference**, **Redundancy**, and **Structure** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
 - Analyze document (all enabled reviewers), selection, current paragraph, or one analyzer. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
-- OpenAI-compatible provider; easy llama.cpp setup, optional model discovery, manual model IDs, global model inheritance, and per-analyzer model overrides.
-- Writing profiles, local review caching, automatic exact-match saved-review restoration, versioned settings, safe writes, and conflict detection on save.
+- Configuration-driven custom AI reviewers: editable instructions, stable IDs, scope, severity and enablement, using the same exact-quote diagnostics and reviewed fixes as built-ins.
+- Named OpenAI-compatible backends with independent credentials/options, default backend/model inheritance, per-analyzer overrides, connection tests, and shared global/per-server concurrency limits.
+- Embedded offline **Harper** English grammar/style review; no API key, network, runtime management or downloads. Optional and disabled globally by default, including upgrades.
+- Built-in and editable custom writing profiles, local review caching, automatic exact-match saved-review restoration, versioned settings, safe writes, and conflict detection on save.
+- Opt-in analyzer/model evaluation CLI with an editable nonfiction corpus and protocol/mapping/latency/false-positive reports.
 - No accounts, telemetry, cloud sync, inference runtime, model downloads, chat, autocomplete, or mandatory cloud services.
 
 ## Development and desktop builds
@@ -50,7 +53,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.1.5_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.2.0_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -107,7 +110,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.1.5**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.0**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -201,24 +204,63 @@ Oversized AI units are skipped before cache lookup or inference, with a warning 
 
 **Settings → Analysis → Parallel AI jobs** sets a global per-run limit of **1–8 simultaneous AI review requests**; the default is **1 (sequential)**, including when loading older settings. It is shared across reviewers and paragraph jobs, not multiplied per reviewer. A single paragraph-oriented reviewer can use multiple jobs when reviewing a document. Local rules do not use AI request slots, and cache hits require no inference slot.
 
-Parallel execution is used only when every **selected, enabled, scope/profile-compatible AI reviewer** resolves to the same model on the same server. Blank overrides inherit the global model, and explicit overrides matching that model are eligible. Mixed-model runs remain fully sequential. Effective configurations and the job limit are captured at run start; changing settings cancels the run. History records the actual limit, but older/recovered records do not invent it.
+Migrated single-backend setups retain v0.1's same-model policy and existing global cap: mixed-model runs stay sequential. In **Settings → Backends**, add another backend or disable **Preserve v0.1 single-backend/single-model scheduling** to use global **and** per-server bounds. Per-backend limits default to **2**; start with a global limit of **4** for two servers supporting two requests each. Aliases for one normalized server share the stricter cap. A blocked server never occupies a global slot needed by another server. Effective configurations and limits are captured at run start; changing settings cancels the run. History records actual global/resource bounds, without inventing missing legacy metadata.
 
 Start with **2** if your inference server supports concurrent requests. For llama.cpp, configure the server's supported parallel-slot setting (commonly `--parallel` / `-np`) separately; Draftbench does not configure slots or load models. Higher concurrency can increase KV-cache/RAM/VRAM pressure and is not guaranteed to improve speed if the server serializes requests internally. Timeouts begin when requests are sent, not while waiting for a Draftbench job slot.
 
 Cancel stops queued work and cancels all active review requests. In-flight jobs are drained before the run is completed; one reviewer's failure does not stop other reviewers. Exact mapping, stale-result checks, and reviewed fixes remain unchanged. Scheduling does not alter analyzer prompts or cache/saved-review identity, so changing only the job limit does not invalidate reusable reviews.
 
-Effective configuration is resolved once and shared by requests, provenance, freshness checks, and cache keys. Changing a model invalidates only that analyzer's applicable cache. Timeout/temperature/output-budget changes also change cache identity. The types can evolve to provider/server/prompt/scope overrides later without changing the editor or Problems panel.
+Effective configuration is resolved once and shared by requests, provenance, freshness checks, and cache keys. Changing a model invalidates only that analyzer's applicable cache. Timeout/temperature/output-budget changes also change cache identity. Backend display-name changes do not change inference identity; endpoint/model/options/credential changes do. Custom prompt/scope changes version the reviewer and invalidate incompatible results.
 
-Profiles are deliberately small analyzer presets:
+Profiles are analyzer presets, not hidden credential or model overrides:
 
 | Profile | Enabled by preset |
 | --- | --- |
-| General prose | Repeated word, Clarity, Ambiguous reference, Redundancy |
-| Technical writing | All five analyzers |
-| Essay | All five analyzers |
-| Professional email | Repeated word, Clarity, Ambiguous reference, Redundancy |
+| General prose | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy |
+| Technical writing | All six built-in analyzers |
+| Essay | All six built-in analyzers |
+| Professional email | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy |
 
-Global analyzer disable switches apply on top of these presets. Choose Essay or Technical writing to include Structure. Profiles are stored per document. Specialized acronym/deadline/request/tone checks are **future work**, not hidden v0.1 features.
+Global disable switches apply on top of presets; **Harper is initially disabled globally**. Choose Essay or Technical writing to include Structure. **Settings → Profiles** creates, duplicates, renames, edits and deletes custom presets, with built-in/custom reviewer membership and a default-profile choice. Built-in profiles remain available and read-only. Documents persist their chosen profile ID. Removing a profile safely falls back to General prose without replacing document identity. Profiles never alter backend credentials or model choices.
+
+### Custom AI reviewers
+
+In **Settings → Analyzers**, create a reviewer with a unique lowercase ID, name/description, scope (**paragraph**, **paragraph + context**, **selection only**, or **document**), task instructions and default severity. Keep analyzer changes, then **Save settings**. IDs are stable after creation; duplicate a built-in or custom AI reviewer to start from an existing task. Built-in prompts are read-only. Enable/disable, edit or delete custom definitions; deleted membership/override references are cleaned up.
+
+Example task: “For professional emails, flag requests whose action or deadline is genuinely unclear. Return no findings for a direct, unambiguous request.” This is configuration, **not executable plugin code**. Draftbench supplies the diagnostic schema, exact-quote requirements and reviewer-not-author policy. Custom findings use ordinary inline underlines, filtering/grouping, provenance, dismissal, reviewed Apply and Undo/Redo. Structural/cross-block suggestions remain report-only.
+
+Run a custom reviewer individually from **Run analyzer**, or add it to a custom profile. Selection-only reviewers require a selection and never silently review the whole document. Paragraph/document input budgets and scope guards apply just as they do to built-ins.
+
+### Named backends and routing
+
+**Settings → Backends** manages named servers, default model, timeout/temperature/output settings, per-server concurrency and keys. For example, configure **Local Fast** at `http://localhost:8080` and **GPU Box** at your reachable Tailscale address. Choose a default backend; in **Analyzers**, blank backend/model overrides inherit that backend and its model. Explicit overrides can route Clarity locally and Structure to GPU Box. Effective server/model is shown before running and in finding/history provenance.
+
+Connection tests use a minimal completion, not document prose; model discovery is optional. Model IDs must actually be served. Keys are independently stored under backend-specific OS credential references and never fall back to another server's key. Session-only fallback remains visible. Removing a backend requires reassigning analyzer overrides first; it does not delete unrelated OS credentials. New backend IDs do not reuse deleted credential slots.
+
+The original **AI** tab is retained for the migrated Default backend. It is not a second, competing inference configuration.
+
+### Offline Harper
+
+Enable **Harper** in Analyzers (or Analysis), with a profile that includes it. It runs after the local-check debounce and can also be run manually at document/paragraph/selection scope. The pinned Rust engine is compiled into the application and needs no connection. American-English curated grammar/style checks are used; spelling is left to native spellcheck and repetition to Repeated word. Fenced code blocks are excluded. Findings, alternative replacement choices, provenance, cache/restoration and reviewed fixes use the common pipeline; no suggestion is applied automatically.
+
+Unicode scalar offsets from Harper are explicitly converted to editor UTF-16 offsets and exact-checked. Paragraph text is plain text; mark-level inline-code exclusion, dialect choices and user dictionaries remain follow-ups. A cancelled native grammar worker may finish in the background, but cannot publish stale results. Upstream Harper is Apache-2.0 licensed; its [license](src-tauri/resources/harper-LICENSE.txt) and [notice](src-tauri/resources/harper-NOTICE.txt) ship with desktop bundles.
+
+### Opt-in analyzer/model evaluation
+
+Normal tests never contact an inference endpoint. The developer CLI runs only when invoked explicitly:
+
+```sh
+npm run eval -- --dry-run
+npm run eval -- --url http://localhost:8080 --model served-model
+npm run eval -- --url http://localhost:8080 --models model-a,model-b --jobs 2
+npm run eval -- --settings /path/to/settings.json --backend default --backend backend-ID
+```
+
+Use `--corpus path` to edit/replace `eval/corpus.json`, `--output directory` for reports, and `--help` for all options. The initial 12 cases cover clarity, references, redundancy and structure, with clean negative cases; cases record ID, profile, source, analyzer, expected behavior and optional expected quote. A custom analyzer ID uses its saved definition. Explicit targets compare the selected backend/model, rather than silently inheriting individual analyzer routing.
+
+`DRAFTBENCH_EVAL_API_KEY` supplies the Default key; `DRAFTBENCH_EVAL_KEYS` is a JSON object mapping backend IDs to keys for multiple servers. The CLI does **not** read OS credentials. Do not put keys in corpus/settings files or command-line arguments.
+
+Timestamped JSON/Markdown reports under ignored `eval/results/` include structured-output validity, malformed responses, exact-quote validity, mapping success, finding/negative-case false-positive counts, missed expected issues, expected-quote/case-pass proxies, latency and raw responses/HTTP attempts. These are **not semantic quality scores**: read outputs against the written expectations. The case adapter supports plain paragraphs and ATX headings, not the full editor Markdown model. Reports contain corpus prose and model output; keep them private. This Node-fetch evaluator shares the production reviewer/provider/mapping pipeline, but is not native-transport certification.
 
 ## Storage and privacy
 
@@ -235,7 +277,7 @@ Markdown is the source of truth. Project sidecars are optional and recoverable. 
 
 Settings live in Tauri's OS app-config directory (for example `~/.config/org.draftbench.desktop/settings.json` on Linux). Recent project names, canonical paths, and last-opened timestamps live separately in `recent-projects.json` in that same app-config directory, not inside a writing project. The list is local and unencrypted; it contains no document text or API keys. If it cannot be saved, a warning is shown but opening/writing still works (the current session can retain a recent entry).
 
-API keys use the OS credential store—Secret Service on Linux, Keychain on macOS, Credential Manager on Windows. If secure storage is unavailable, Draftbench warns and uses a **session-only** key; there is no plaintext fallback. Key changes apply when testing or saving and clear cached reviews, even if you later cancel other settings changes.
+API keys use independent backend references in the OS credential store—Secret Service on Linux, Keychain on macOS, Credential Manager on Windows. Settings version 2 migrates the original key reference unchanged; no key text enters JSON. If secure storage is unavailable, Draftbench warns and uses a **session-only** key; there is no plaintext fallback. Key changes apply when testing or saving and clear cached reviews, even if you later cancel other settings changes.
 
 **Analysis caches contain quotes/replacement text from your documents.** They are ordinary local sidecar files, not encrypted. Use **Settings → Analysis → Clear analysis cache** to remove cached reviews, saved findings, and the run history when needed; avoid publishing `.draftbench/analysis.json` if your writing is private. Keys and authorization headers never enter project files, settings JSON, or cache keys.
 
@@ -257,15 +299,19 @@ src/
   diagnostics/    Common types, quote/range mapping, freshness, Problems UI
   analyzers/      Interface, scope runner, cache, deterministic/semantic implementations
   ai/             Provider interface and generic OpenAI-compatible implementation
-  profiles/       Analyzer presets
-  settings/       Settings schema, inheritance, settings UI
+  profiles/       Built-in/custom analyzer presets
+  settings/       Versioned definitions, migration, effective routing, management UI
+  eval/           Opt-in corpus runner, metrics and bounded Node transport
   storage/        Typed native command bridge
   ui/             Shared dialog/focus handling and styling
 src-tauri/src/
   lib.rs          Narrow IPC commands and desktop state
   storage.rs      Root-scoped files, safe writes, hashing, project tree
-  network.rs      reqwest HTTP, cancellation, limits, failure classification
+  network.rs      reqwest HTTP, isolated credentials, cancellation, limits
+  grammar.rs      Embedded Harper adapter, UTF-16 offsets and suggestions
 ```
+
+`App.tsx` now composes `WorkspaceView`; `useWorkspaceSession` coordinates the active project/document without owning rendering. `useSettingsState`, `useRecentProjects` and `useLocalAnalysis` isolate startup/migration, MRU state and local debounce. `reviewRun.ts` owns the manual run lifecycle; `analyzers/jobs.ts` owns shared global/resource slots. All engines go through `runner.ts`, mapping/freshness, cache and saved-review contracts. See [contributor architecture/migration notes](docs/contributing.md).
 
 An analyzer receives an immutable snapshot, structured blocks, a planned scope/context unit, effective configuration, an optional prior state, and (for AI) a provider. It returns structured issues. Zod validation, exact-quote mapping, cache handling, and freshness checks are shared infrastructure.
 
@@ -350,7 +396,7 @@ XDG_CONFIG_HOME="$SMOKE_CONFIG" dbus-run-session -- xvfb-run -a tauri-driver --n
 python3 scripts/native-smoke.py
 ```
 
-This launches the bundled desktop and checks real IPC, scoped Markdown save/load, conflict protection, Rust HTTP against a mock compatible server without CORS headers, and recent-folder persistence/direct reopening across a full app restart. It also persists custom input budgets and a three-job setting across restart, runs a 50,000-plus-character document review through the real UI, verifies a three-request peak at the concurrent mock server, and verifies an unchanged rerun makes no new HTTP requests. It does not prove model quality or real llama.cpp compatibility.
+This launches the bundled desktop and checks real IPC, scoped Markdown CRUD/conflicts, native HTTP without CORS, and recent-folder reopening after restart. It migrates legacy settings, reviews a 50,000-plus-character document with persisted budgets, then runs custom reviewers/profile through **two** native mock servers: global peak **3**, backend peaks **1/2**, isolated keys and inference-free reruns. Real embedded Harper Unicode mapping, fenced-code exclusion, bold-preserving Apply and Undo are tested with no HTTP. It does not prove model quality or real llama.cpp compatibility.
 
 Optional real-server check (sends only a short test fixture to this explicitly configured endpoint):
 
@@ -370,11 +416,11 @@ The real-server test is skipped without `DRAFTBENCH_AI_BASE_URL`. Actual llama.c
 - Semantic analysis is manual. False positives and imperfect replacements remain possible; confidence is the model's estimate, not calibrated probability.
 - Local HTTP connections and Linux packages were verified; real model responses, private-network deployment, OS credential-store persistence, other OS builds, and signing need suitable environments.
 - No proxy configuration UI. Native requests deliberately bypass environment proxies and reject redirects.
-- Basic schema-version recovery, not sophisticated migrations or advanced production crash recovery. Symlink documents/folders are excluded; hostile concurrent filesystem changes/locking are not comprehensively hardened.
+- Versioned v1→v2 migration and entry-level settings repair, not advanced production crash recovery. Symlink documents/folders are excluded; hostile concurrent filesystem changes/locking are not comprehensively hardened.
 - Cache cannot detect model weights silently replaced behind the same ID.
 
 Next: real llama.cpp/Tailscale acceptance testing, broader Markdown fidelity, section-aware long-document review, terminology/acronym/email-request checks, stronger desktop accessibility automation, and external-change handling. Keep the author-first workflow and avoid speculative plugin/agent infrastructure.
 
 ## License
 
-MIT. See `LICENSE`. TipTap/ProseMirror, Tauri, React, and the other selected components are open-source; Draftbench uses no paid editor services or proprietary analyzer runtime.
+Draftbench application code: MIT, see `LICENSE`. Dependencies retain their own licenses; embedded Harper is Apache-2.0 with bundled license/attribution in `src-tauri/resources/`. TipTap/ProseMirror, Tauri, React and the other selected components are open-source; no paid editor service or proprietary analyzer runtime is used.

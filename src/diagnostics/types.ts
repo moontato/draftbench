@@ -25,6 +25,8 @@ export interface EngineMetadata {
   name: string
   server?: string
   model?: string
+  backend?: string
+  backendId?: string
 }
 export interface Diagnostic {
   id: string
@@ -43,6 +45,7 @@ export interface Diagnostic {
   to: number
   blockIndex: number
   replacement?: string
+  replacements?: string[]
   confidence?: number
   revision: number
   contentHash: string
@@ -59,6 +62,7 @@ export interface Issue {
   message: string
   explanation: string
   replacement?: string
+  replacements?: string[]
   confidence?: number
   offset?: number
 }
