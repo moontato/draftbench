@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { diffWords } from 'diff'
 import {
   ArrowUpRight,
@@ -6,11 +6,13 @@ import {
   ChevronDown,
   ChevronRight,
   CircleCheck,
+  History,
   SlidersHorizontal,
   X,
 } from 'lucide-react'
 import type { Diagnostic, Severity } from './types'
 import type { Analyzer } from '../analyzers/types'
+import { useReviewResize } from './useReviewResize'
 interface Props {
   findings: Diagnostic[]
   selected: string | null
@@ -26,6 +28,7 @@ interface Props {
   onResetDismissed: () => void
   onRun: (analyzerId?: string) => void
   onSettings: () => void
+  onHistory: () => void
 }
 const severityOrder: Record<Severity, number> = { error: 0, warning: 1, suggestion: 2, info: 3 }
 export function ProblemsPanel(props: Props) {
@@ -35,6 +38,12 @@ export function ProblemsPanel(props: Props) {
     [group, setGroup] = useState('analyzer'),
     [showDismissed, setShowDismissed] = useState(false)
   const [engineOpen, setEngineOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const reviewId = useId()
+  const { areaRef, height, separatorProps } = useReviewResize()
+  useEffect(() => {
+    setCollapsed(false)
+  }, [props.selected])
   const visible = props.findings.filter(
     (f) =>
       (showDismissed || !props.dismissed.has(f.id)) &&
@@ -72,14 +81,25 @@ export function ProblemsPanel(props: Props) {
             </span>
           </h2>
         </div>
-        <button
-          className="icon-button"
-          onClick={props.onSettings}
-          title="Configure analyzers"
-          aria-label="Configure analyzers"
-        >
-          <SlidersHorizontal size={17} />
-        </button>
+        <div className="analysis-heading-actions">
+          <button
+            className="icon-button"
+            onClick={props.onHistory}
+            disabled={!props.hasDocument}
+            title="Analysis history"
+            aria-label="Analysis history"
+          >
+            <History size={17} />
+          </button>
+          <button
+            className="icon-button"
+            onClick={props.onSettings}
+            title="Configure analyzers"
+            aria-label="Configure analyzers"
+          >
+            <SlidersHorizontal size={17} />
+          </button>
+        </div>
       </div>
       <div className="analysis-controls">
         <select
@@ -130,136 +150,166 @@ export function ProblemsPanel(props: Props) {
         {props.busy && <span className="spinner" />}
         {props.status || 'Ready when you are.'}
       </div>
-      <div className="findings-scroll">
-        {!visible.length && (
-          <div className="analysis-empty">
-            <div className="empty-symbol">
-              <CircleCheck size={28} strokeWidth={1.4} />
-            </div>
-            <h3>{props.findings.length ? 'Nothing in this view' : 'A second pair of eyes'}</h3>
-            <p>
-              {props.findings.length
-                ? 'Adjust your filters or show dismissed findings.'
-                : 'Analyze your draft for meaningful problems. You decide what to change.'}
-            </p>
-            <button
-              className="text-button"
-              disabled={!props.hasDocument || props.busy}
-              onClick={() => props.onRun()}
-            >
-              Analyze document <ArrowUpRight size={14} />
-            </button>
-          </div>
-        )}
-        {groups.map(([label, findings]) => (
-          <section className="finding-group" key={label}>
-            <h3>
-              {label}
-              <span>{findings.length}</span>
-            </h3>
-            {findings.map((f) => (
-              <button
-                key={f.id}
-                className={`finding-card ${props.selected === f.id ? 'selected' : ''} ${props.dismissed.has(f.id) ? 'dismissed' : ''}`}
-                onClick={() => props.onSelect(f)}
-              >
-                <span className={`severity-label ${f.severity}`}>
-                  <span className="severity-dot" />
-                  {f.severity}
-                  {f.engine.kind === 'ai' && <span className="ai-tag">AI</span>}
-                </span>
-                <span className="finding-message">{f.message}</span>
-                <span className="finding-quote">
-                  “{f.quote.length > 100 ? f.quote.slice(0, 100) + '…' : f.quote}”
-                </span>
-                <span className="finding-link">
-                  Inspect passage <ChevronRight size={12} />
-                </span>
-              </button>
-            ))}
-          </section>
-        ))}
-      </div>
-      {chosen && (
-        <div className="fix-inspector">
-          <div className="inspector-heading">
-            <h3>Review finding</h3>
-            <button
-              className="text-button"
-              onClick={() => props.onSelect(chosen)}
-              title="Jump to source"
-            >
-              Jump <ArrowUpRight size={13} />
-            </button>
-          </div>
-          <p>{chosen.explanation}</p>
-          {chosen.replacement !== undefined && (
-            <>
-              <span className="eyebrow">ORIGINAL</span>
-              <div className="source-review">{chosen.quote}</div>
-              <span className="eyebrow">SUGGESTED CHANGE</span>
-              <div className="replacement-review">
-                {diffWords(chosen.quote, chosen.replacement).map((part, index) =>
-                  part.removed ? (
-                    <del key={index}>{part.value}</del>
-                  ) : part.added ? (
-                    <ins key={index}>{part.value}</ins>
-                  ) : (
-                    <span key={index}>{part.value}</span>
-                  ),
-                )}
+      <div className="analysis-review-area" ref={areaRef}>
+        <div className="findings-scroll">
+          {!visible.length && (
+            <div className="analysis-empty">
+              <div className="empty-symbol">
+                <CircleCheck size={28} strokeWidth={1.4} />
               </div>
-            </>
-          )}
-          <button className="engine-toggle text-button" onClick={() => setEngineOpen(!engineOpen)}>
-            Analyzer & engine <ChevronDown size={13} />
-          </button>
-          {engineOpen && (
-            <dl className="engine-details">
-              <dt>Analyzer</dt>
-              <dd>
-                {props.analyzers.find((a) => a.id === chosen.analyzerId)?.name} ·{' '}
-                {chosen.analyzerVersion}
-              </dd>
-              <dt>Engine</dt>
-              <dd>{chosen.engine.name}</dd>
-              {chosen.engine.model && (
-                <>
-                  <dt>Model</dt>
-                  <dd>{chosen.engine.model}</dd>
-                  <dt>Server</dt>
-                  <dd>{chosen.engine.server}</dd>
-                </>
-              )}
-              {chosen.confidence !== undefined && (
-                <>
-                  <dt>Confidence</dt>
-                  <dd>
-                    {Math.round(chosen.confidence * 100)}% (
-                    {chosen.engine.kind === 'ai' ? 'model estimate' : 'rule confidence'})
-                  </dd>
-                </>
-              )}
-            </dl>
-          )}
-          <div className="fix-actions">
-            {chosen.replacement !== undefined && (
+              <h3>{props.findings.length ? 'Nothing in this view' : 'A second pair of eyes'}</h3>
+              <p>
+                {props.findings.length
+                  ? 'Adjust your filters or show dismissed findings.'
+                  : 'Analyze your draft for meaningful problems. You decide what to change.'}
+              </p>
               <button
-                className="primary-button"
-                disabled={!props.canApply}
-                onClick={() => props.onApply(chosen)}
+                className="text-button"
+                disabled={!props.hasDocument || props.busy}
+                onClick={() => props.onRun()}
               >
-                <Check size={14} />
-                Apply suggestion
+                Analyze document <ArrowUpRight size={14} />
               </button>
-            )}
-            <button className="secondary-button" onClick={() => props.onDismiss(chosen.id)}>
-              <X size={14} />
-              Dismiss
-            </button>
-          </div>
+            </div>
+          )}
+          {groups.map(([label, findings]) => (
+            <section className="finding-group" key={label}>
+              <h3>
+                {label}
+                <span>{findings.length}</span>
+              </h3>
+              {findings.map((f) => (
+                <button
+                  key={f.id}
+                  className={`finding-card ${props.selected === f.id ? 'selected' : ''} ${props.dismissed.has(f.id) ? 'dismissed' : ''}`}
+                  onClick={() => {
+                    setCollapsed(false)
+                    props.onSelect(f)
+                  }}
+                >
+                  <span className={`severity-label ${f.severity}`}>
+                    <span className="severity-dot" />
+                    {f.severity}
+                    {f.engine.kind === 'ai' && <span className="ai-tag">AI</span>}
+                  </span>
+                  <span className="finding-message">{f.message}</span>
+                  <span className="finding-quote">
+                    “{f.quote.length > 100 ? f.quote.slice(0, 100) + '…' : f.quote}”
+                  </span>
+                  <span className="finding-link">
+                    Inspect passage <ChevronRight size={12} />
+                  </span>
+                </button>
+              ))}
+            </section>
+          ))}
         </div>
-      )}
+        {chosen && (
+          <section
+            className={`fix-inspector ${collapsed ? 'collapsed' : ''}`}
+            aria-label="Review finding"
+            style={collapsed ? undefined : { height }}
+          >
+            {!collapsed && (
+              <div className="inspector-resize" {...separatorProps}>
+                <span />
+              </div>
+            )}
+            <div className="inspector-heading">
+              <h3>
+                <button
+                  className="text-button inspector-toggle"
+                  onClick={() => setCollapsed((old) => !old)}
+                  aria-expanded={!collapsed}
+                  aria-controls={reviewId}
+                  aria-label={collapsed ? 'Expand review finding' : 'Collapse review finding'}
+                >
+                  {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} Review
+                  finding
+                </button>
+              </h3>
+              <button
+                className="text-button"
+                onClick={() => props.onSelect(chosen)}
+                title="Jump to source"
+              >
+                Jump <ArrowUpRight size={13} />
+              </button>
+            </div>
+            <div className="inspector-body" id={reviewId} hidden={collapsed}>
+              <p>{chosen.explanation}</p>
+              {chosen.replacement !== undefined && (
+                <>
+                  <span className="eyebrow">ORIGINAL</span>
+                  <div className="source-review">{chosen.quote}</div>
+                  <span className="eyebrow">SUGGESTED CHANGE</span>
+                  <div className="replacement-review">
+                    {diffWords(chosen.quote, chosen.replacement).map((part, index) =>
+                      part.removed ? (
+                        <del key={index}>{part.value}</del>
+                      ) : part.added ? (
+                        <ins key={index}>{part.value}</ins>
+                      ) : (
+                        <span key={index}>{part.value}</span>
+                      ),
+                    )}
+                  </div>
+                </>
+              )}
+              <button
+                className="engine-toggle text-button"
+                onClick={() => setEngineOpen(!engineOpen)}
+              >
+                Analyzer & engine <ChevronDown size={13} />
+              </button>
+              {engineOpen && (
+                <dl className="engine-details">
+                  <dt>Analyzer</dt>
+                  <dd>
+                    {props.analyzers.find((a) => a.id === chosen.analyzerId)?.name} ·{' '}
+                    {chosen.analyzerVersion}
+                  </dd>
+                  <dt>Engine</dt>
+                  <dd>{chosen.engine.name}</dd>
+                  {chosen.engine.model && (
+                    <>
+                      <dt>Model</dt>
+                      <dd>{chosen.engine.model}</dd>
+                      <dt>Server</dt>
+                      <dd>{chosen.engine.server}</dd>
+                    </>
+                  )}
+                  {chosen.confidence !== undefined && (
+                    <>
+                      <dt>Confidence</dt>
+                      <dd>
+                        {Math.round(chosen.confidence * 100)}% (
+                        {chosen.engine.kind === 'ai' ? 'model estimate' : 'rule confidence'})
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )}
+              <div className="fix-actions">
+                {chosen.replacement !== undefined && (
+                  <button
+                    className="primary-button"
+                    disabled={!props.canApply}
+                    onClick={() => props.onApply(chosen)}
+                  >
+                    <Check size={14} />
+                    Apply suggestion
+                  </button>
+                )}
+                <button className="secondary-button" onClick={() => props.onDismiss(chosen.id)}>
+                  <X size={14} />
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
       <div className="analysis-footer">
         <label>
           <input

@@ -36,11 +36,14 @@ import { snapshot } from '../editor/blocks'
 import { applyFix, decorate, jumpTo } from '../editor/diagnostics'
 import { readMarkdown, writeMarkdown, type MarkdownFile } from '../documents/markdown'
 import { ProblemsPanel } from '../diagnostics/ProblemsPanel'
+import { AnalysisHistoryDialog } from '../diagnostics/AnalysisHistoryDialog'
 import { refreshDiagnostic } from '../diagnostics/mapping'
 import type { Diagnostic, Snapshot, Scope } from '../diagnostics/types'
 import { analyzers } from '../analyzers/registry'
 import { planScope, runAnalyzer } from '../analyzers/runner'
 import { AnalysisCache } from '../analyzers/cache'
+import { SavedReviews } from '../analyzers/savedReviews'
+import { AnalysisHistory } from '../analyzers/history'
 import { OpenAICompatibleProvider } from '../ai/providers/openai'
 import { canonical, hash } from '../diagnostics/hash'
 import { profiles, type ProfileId } from '../profiles/profiles'
@@ -127,6 +130,7 @@ export function App() {
     [session, setSession] = useState<Session | null>(null)
   const [settings, setSettings] = useState(defaultSettings),
     settingsRef = useRef(settings)
+  const [settingsLoaded, setSettingsLoaded] = useState(!desktopAvailable)
   const [current, setCurrent] = useState<Snapshot | null>(null),
     currentRef = useRef<Snapshot | null>(null)
   const [dirty, setDirty] = useState(false),
@@ -141,6 +145,8 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(true),
     [rightOpen, setRightOpen] = useState(true),
     [settingsTab, setSettingsTab] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [, setHistoryRevision] = useState(0)
   const [busy, setBusy] = useState(false),
     [status, setStatus] = useState('')
   const { notice, showNotice, dismissNotice } = useNotice()
@@ -154,6 +160,9 @@ export function App() {
     revision = useRef(0)
   const meta = useRef<ProjectMeta>({ version: 1, documents: {} })
   const cache = useRef(new AnalysisCache()),
+    savedReviews = useRef(new SavedReviews(analyzers)),
+    history = useRef(new AnalysisHistory()),
+    pendingRestore = useRef<string | null>(null),
     provider = useRef(new OpenAICompatibleProvider()),
     running = useRef<AbortController | null>(null)
   const saveRef = useRef<() => Promise<boolean>>(async () => false),
@@ -194,6 +203,8 @@ export function App() {
       await storage.setMetadata('analysis', {
         version: 1,
         cache: cache.current.export(),
+        reviews: savedReviews.current.export(),
+        history: history.current.export(),
       })
   }
   persistRef.current = persistAnalysis
@@ -216,6 +227,7 @@ export function App() {
         if (raw) setSettings(settingsSchema.parse(raw))
       })
       .catch((error) => showNotice(errorMessage(error), true))
+      .finally(() => setSettingsLoaded(true))
     let dispose: (() => void) | undefined,
       stopped = false
     void getCurrentWindow()
@@ -243,6 +255,7 @@ export function App() {
     running.current = null
     setBusy(false)
     setStatus('')
+    setHistoryOpen(false)
     revision.current = 0
     editorRef.current = null
     let document = meta.current.documents[path]
@@ -260,6 +273,7 @@ export function App() {
       original: loaded.content,
     }
     sessionRef.current = next
+    pendingRestore.current = next.token
     setSession(next)
     setProfile(document.profile)
     markDirty(false)
@@ -301,6 +315,10 @@ export function App() {
     markDirty(false)
     setStatus('')
     cache.current.clear()
+    savedReviews.current.clear()
+    history.current.clear()
+    setHistoryOpen(false)
+    pendingRestore.current = null
     setDismissed(new Set())
     meta.current = { version: 1, documents: {} }
     try {
@@ -318,9 +336,28 @@ export function App() {
       const analysis = (await storage.metadata('analysis')) as {
         version: number
         cache: unknown
+        reviews?: unknown
+        history?: unknown
       } | null
       if (analysis?.version === 1) {
-        cache.current.import(analysis.cache)
+        const problems: string[] = []
+        const imports: [unknown, (data: unknown) => void][] = [
+          [analysis.cache, (data) => cache.current.import(data)],
+          [analysis.history, (data) => history.current.import(data)],
+          [analysis.reviews, (data) => savedReviews.current.import(data)],
+        ]
+        // A missing/corrupt cache must not block a valid review or history log.
+        for (const [data, apply] of imports) {
+          if (data == null) continue
+          try {
+            apply(data)
+          } catch (error) {
+            problems.push(errorMessage(error))
+          }
+        }
+        history.current.recoverSavedReviews(savedReviews.current.summaries(), analyzers)
+        setHistoryRevision((old) => old + 1)
+        if (problems.length) showNotice(problems.join(' '), true)
       }
     } catch (error) {
       showNotice(errorMessage(error), true)
@@ -367,7 +404,15 @@ export function App() {
       if (sessionRef.current?.token === active.token && !copy) {
         sessionRef.current = next
         setSession(next)
-        if (beforeRevision === revision.current) markDirty(false)
+        if (beforeRevision === revision.current) {
+          markDirty(false)
+          savedReviews.current.confirmSave(
+            snapshot(editor, active.id, revision.current),
+            hash(content),
+            active.diskHash,
+            diskHash,
+          )
+        }
       }
       if (copy && beforeRevision === revision.current) markDirty(false)
       if (copy && beforeRevision === revision.current) {
@@ -431,6 +476,9 @@ export function App() {
     setCurrent(snap)
     currentRef.current = snap
     markDirty(true)
+    setStatus((old) =>
+      old.startsWith('Saved review') ? 'Document changed since the saved review.' : old,
+    )
     setFindings((old) =>
       old.flatMap((f) => {
         const next = refreshDiagnostic(f, snap)
@@ -438,6 +486,34 @@ export function App() {
       }),
     )
   }
+  useEffect(() => {
+    const active = sessionRef.current,
+      editor = editorRef.current,
+      input = currentRef.current
+    if (
+      !active ||
+      !editor ||
+      !input ||
+      !settingsLoaded ||
+      fileBusy ||
+      pendingRestore.current !== active.token
+    )
+      return
+    pendingRestore.current = null
+    if (dirtyRef.current || active.source.unsupported.length) return
+    const restored = savedReviews.current.restore(
+      input,
+      active.diskHash,
+      hash(writeMarkdown(active.source, editor.getMarkdown())),
+      profile,
+      settingsRef.current,
+    )
+    if (!restored) return
+    setFindings(restored.findings)
+    setStatus(
+      `Saved review · ${restored.scope === 'block' ? 'paragraph' : restored.scope} · ${restored.findings.length} findings · ${new Date(restored.analyzedAt).toLocaleString()}`,
+    )
+  }, [current?.documentId, session?.token, settingsLoaded, fileBusy])
   useEffect(() => {
     const editor = editorRef.current
     if (editor && !editor.isDestroyed)
@@ -497,7 +573,7 @@ export function App() {
   const run = async (scope: Scope = 'document', analyzerId?: string, force = false) => {
     const editor = editorRef.current,
       active = sessionRef.current
-    if (!editor || !active || busy) return
+    if (!editor || !active || busy || !settingsLoaded) return
     const input = snapshot(editor, active.id, revision.current)
     if (scope !== 'selection') input.selection = undefined
     if (scope === 'selection' && !input.selection) {
@@ -514,7 +590,40 @@ export function App() {
       )
       return
     }
+    const serializedHash = hash(writeMarkdown(active.source, editor.getMarkdown()))
+    const markdownHash = dirtyRef.current ? serializedHash : active.diskHash
+    let reviewedFindings = [...findings]
     const controller = new AbortController()
+    let historyId = ''
+    try {
+      historyId = history.current.start(
+        active.id,
+        serializedHash,
+        scope,
+        profile,
+        force,
+        targets,
+        settingsRef.current,
+      )
+    } catch (error) {
+      showNotice(errorMessage(error), true)
+    }
+    const recordHistory = (
+      reviewerId: string,
+      result: Parameters<AnalysisHistory['update']>[2],
+    ) => {
+      history.current.update(historyId, reviewerId, result)
+      setHistoryRevision((old) => old + 1)
+    }
+    const cancelHistory = () => {
+      history.current.finish(historyId, true)
+      setHistoryRevision((old) => old + 1)
+      void persistRef
+        .current()
+        .catch(() => showNotice('Analysis history could not be saved.', true))
+    }
+    controller.signal.addEventListener('abort', cancelHistory, { once: true })
+    setHistoryRevision((old) => old + 1)
     running.current = controller
     setBusy(true)
     setRightOpen(true)
@@ -525,6 +634,7 @@ export function App() {
     for (const analyzer of targets) {
       if (controller.signal.aborted) break
       setStatus(`Reviewing with ${analyzer.name}…`)
+      recordHistory(analyzer.id, { status: 'running' })
       const config = effectiveConfig(settingsRef.current, analyzer.id),
         configHash = hash(canonical(config))
       try {
@@ -542,11 +652,31 @@ export function App() {
           controller.signal.aborted ||
           !currentRef.current ||
           hash(canonical(effectiveConfig(settingsRef.current, analyzer.id))) !== configHash
-        )
+        ) {
+          if (!controller.signal.aborted)
+            recordHistory(analyzer.id, {
+              status: 'stale',
+              cacheHits: result.cacheHits,
+              requests: result.requests,
+              discarded: result.findings.length,
+            })
           continue
+        }
         const fresh = result.findings.flatMap((f) => {
           const refreshed = refreshDiagnostic(f, currentRef.current!)
           return refreshed ? [refreshed] : []
+        })
+        recordHistory(analyzer.id, {
+          status: result.warnings.length
+            ? 'warnings'
+            : result.findings.length !== fresh.length
+              ? 'stale'
+              : 'completed',
+          findings: fresh.length,
+          cacheHits: result.cacheHits,
+          requests: result.requests,
+          warnings: result.warnings.length,
+          discarded: result.findings.length - fresh.length,
         })
         discarded += result.findings.length - fresh.length
         count += fresh.length
@@ -554,15 +684,27 @@ export function App() {
         const targetIds = new Set(
           planScope(analyzer, input, scope).flatMap((unit) => unit.targets.map((b) => b.id)),
         )
+        reviewedFindings = [
+          ...reviewedFindings.filter(
+            (f) => f.analyzerId !== analyzer.id || !targetIds.has(f.blockId),
+          ),
+          ...fresh,
+        ]
         setFindings((old) => [
           ...old.filter((f) => f.analyzerId !== analyzer.id || !targetIds.has(f.blockId)),
           ...fresh,
         ])
         errors.push(...result.warnings)
       } catch (error) {
-        if (!controller.signal.aborted) errors.push(`${analyzer.name}: ${errorMessage(error)}`)
+        if (!controller.signal.aborted) {
+          recordHistory(analyzer.id, { status: 'failed' })
+          errors.push(`${analyzer.name}: ${errorMessage(error)}`)
+        }
       }
     }
+    controller.signal.removeEventListener('abort', cancelHistory)
+    history.current.finish(historyId, controller.signal.aborted)
+    setHistoryRevision((old) => old + 1)
     if (running.current !== controller) return
     setBusy(false)
     running.current = null
@@ -574,10 +716,36 @@ export function App() {
     if (errors.length) showNotice(errors.join(' '), true)
     else if (!controller.signal.aborted)
       showNotice('Analysis complete. Review each suggestion before applying it.')
+    if (
+      !controller.signal.aborted &&
+      !errors.length &&
+      !discarded &&
+      sessionRef.current?.token === active.token &&
+      currentRef.current?.hash === input.hash &&
+      serializedHash === hash(writeMarkdown(active.source, editor.getMarkdown()))
+    ) {
+      const valid = reviewedFindings.flatMap((f) => {
+        const refreshed = refreshDiagnostic(f, currentRef.current!)
+        return refreshed ? [refreshed] : []
+      })
+      if (
+        !savedReviews.current.capture(
+          currentRef.current!,
+          markdownHash,
+          serializedHash,
+          profile,
+          settingsRef.current,
+          valid,
+          targets.map((a) => a.id),
+          scope,
+        )
+      )
+        showNotice('Analysis complete, but a reopenable saved review could not be recorded.', true)
+    }
     try {
       await persistAnalysis()
     } catch {
-      showNotice('Analysis complete, but the local cache could not be saved.', true)
+      showNotice('Analysis complete, but the local review/cache could not be saved.', true)
     }
   }
   const selectFinding = (finding: Diagnostic) => {
@@ -660,6 +828,11 @@ export function App() {
     )
       return
     await storage.delete(entry.path)
+    const deletedDocument = meta.current.documents[entry.path]
+    if (deletedDocument) {
+      savedReviews.current.delete(deletedDocument.id)
+      history.current.delete(deletedDocument.id)
+    }
     delete meta.current.documents[entry.path]
     if (session?.path === entry.path) {
       editorRef.current = null
@@ -675,6 +848,7 @@ export function App() {
   }
   const changeProfile = async (value: ProfileId) => {
     setProfile(value)
+    setStatus('')
     running.current?.abort()
     setFindings([])
     if (session) {
@@ -688,6 +862,20 @@ export function App() {
     settingsRef.current = parsed
     setSettings(parsed)
     running.current?.abort()
+    if (
+      status.startsWith('Saved review') &&
+      sessionRef.current &&
+      currentRef.current &&
+      editorRef.current &&
+      !savedReviews.current.restore(
+        currentRef.current,
+        sessionRef.current.diskHash,
+        hash(writeMarkdown(sessionRef.current.source, editorRef.current.getMarkdown())),
+        profile,
+        parsed,
+      )
+    )
+      setStatus('Analysis settings changed since the saved review.')
     setFindings((old) =>
       old.filter(
         (f) =>
@@ -1010,6 +1198,7 @@ export function App() {
             onResetDismissed={() => setDismissed(new Set())}
             onRun={(id) => task(() => run('document', id))}
             onSettings={() => setSettingsTab('Analysis')}
+            onHistory={() => setHistoryOpen(true)}
           />
         )}
       </div>
@@ -1081,6 +1270,18 @@ export function App() {
           </button>
         </div>
       )}
+      {historyOpen && session && (
+        <AnalysisHistoryDialog
+          runs={history.current.forDocument(session.id)}
+          documentName={session.path}
+          currentHash={
+            editorRef.current
+              ? hash(writeMarkdown(session.source, editorRef.current.getMarkdown()))
+              : undefined
+          }
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
       {settingsTab && (
         <SettingsDialog
           settings={settings}
@@ -1092,6 +1293,8 @@ export function App() {
           onCredentialChange={() => {
             running.current?.abort()
             cache.current.clear()
+            savedReviews.current.clear()
+            setStatus('')
             setFindings([])
             const next = {
               ...settingsRef.current,
@@ -1103,18 +1306,19 @@ export function App() {
             settingsRef.current = next
             setSettings(next)
             task(() => storage.saveSettings(next))
+            task(() => persistRef.current())
           }}
           onClearCache={() => {
+            running.current?.abort()
             cache.current.clear()
+            savedReviews.current.clear()
+            history.current.clear()
+            setHistoryRevision((old) => old + 1)
+            setStatus('')
             setFindings([])
             setDismissed(new Set())
             task(async () => {
-              if (project)
-                await storage.setMetadata('analysis', {
-                  version: 1,
-                  cache: cache.current.export(),
-                  dismissed: [],
-                })
+              await persistRef.current()
               showNotice('Analysis cache cleared.')
             })
           }}

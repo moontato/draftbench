@@ -1,5 +1,5 @@
 import type { Analyzer, AnalysisUnit } from './types'
-import type { Block, Diagnostic, Scope, Snapshot } from '../diagnostics/types'
+import type { Block, Diagnostic, EngineMetadata, Scope, Snapshot } from '../diagnostics/types'
 import { canonical, hash } from '../diagnostics/hash'
 import { resolveIssue } from '../diagnostics/mapping'
 import type { EffectiveConfig } from '../settings/model'
@@ -41,6 +41,11 @@ export function planScope(analyzer: Analyzer, input: Snapshot, scope: Scope): An
         : []
     return { targets: [target], context: neighbors, documentScope: false }
   })
+}
+export function engineMetadata(analyzer: Analyzer, config: EffectiveConfig): EngineMetadata {
+  return analyzer.engine === 'ai'
+    ? { kind: 'ai', name: 'OpenAI-Compatible', server: config.serverUrl, model: config.model }
+    : { kind: 'deterministic', name: 'Local rules' }
 }
 export interface RunResult {
   findings: Diagnostic[]
@@ -102,9 +107,7 @@ export async function runAnalyzer(
         scope === 'selection' ? input : { ...input, selection: undefined },
         analyzer.id,
         analyzer.version,
-        analyzer.engine === 'ai'
-          ? { kind: 'ai', name: 'OpenAI-Compatible', server: config.serverUrl, model: config.model }
-          : { kind: 'deterministic', name: 'Local rules' },
+        engineMetadata(analyzer, config),
         configurationHash,
         dependencies,
       )

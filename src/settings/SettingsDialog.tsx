@@ -5,6 +5,7 @@ import { analyzers } from '../analyzers/registry'
 import { AI_LIMITS, defaultSettings, type Settings } from './model'
 import { storage, errorMessage } from '../storage/desktop'
 import type { AIProvider } from '../ai/types'
+import { version as appVersion } from '../../package.json'
 interface Props {
   settings: Settings
   initialTab: string
@@ -329,7 +330,8 @@ export function SettingsDialog({
                   Clear analysis cache
                 </button>
                 <p className="muted">
-                  Project analysis caches may contain excerpts from your writing.
+                  Clears cached reviews, saved findings, and analysis history. Project analysis
+                  caches may contain excerpts from your writing.
                 </p>
               </>
             )}
@@ -372,6 +374,10 @@ export function SettingsDialog({
             )}
             {tab === 'General' && (
               <>
+                <div className="app-version" aria-label="Application version">
+                  <span>Draftbench</span>
+                  <strong>v{appVersion}</strong>
+                </div>
                 <h3>Your writing, your files</h3>
                 <p className="muted">
                   Draftbench works directly in normal Markdown folders. Nothing is hidden in an

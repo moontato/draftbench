@@ -4,7 +4,7 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.1.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
 ## What works
 
@@ -12,11 +12,12 @@ Draftbench v0.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirr
 - Comfortable rich-text prose editing: paragraphs, headings, lists, links, emphasis, quotes, inline code, code blocks, and hard breaks.
 - Collapsible document/analysis panes and focus mode.
 - Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings.
-- Explicit original/proposed-text review with a word-level diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
+- A small History button at the top of the Analysis pane shows the document's previous manual runs, reviewer/model provenance, scope, finding counts, cache reuse, and outcomes.
+- Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
 - **Clarity**, **Ambiguous reference**, **Redundancy**, and **Structure** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
 - Analyze document (all enabled reviewers), selection, current paragraph, or one analyzer. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
 - OpenAI-compatible provider; easy llama.cpp setup, optional model discovery, manual model IDs, global model inheritance, and per-analyzer model overrides.
-- Writing profiles, local review caching, versioned settings, safe writes, and conflict detection on save.
+- Writing profiles, local review caching, automatic exact-match saved-review restoration, versioned settings, safe writes, and conflict detection on save.
 - No accounts, telemetry, cloud sync, inference runtime, model downloads, chat, autocomplete, or mandatory cloud services.
 
 ## Development and desktop builds
@@ -48,7 +49,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.1.0_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.1.1_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -71,6 +72,16 @@ Windows/macOS builds and signing are **not verified** in this environment. Linux
 4. Configure your AI server in **Settings → AI**, or use the offline repeated-word check without AI.
 5. Choose **Analyze document**, **Analyze selection**, or a specific reviewer from **Run analyzer**. Current-paragraph analysis is also in that menu. Document-only reviewers are skipped for selection/paragraph runs; run them explicitly on the document instead.
 6. Click an underline or finding to inspect its passage and explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
+
+The **Review finding** section can be collapsed using its heading chevron without dismissing or forgetting the selected finding. Expand it again, or click a finding card to inspect it. Drag the divider above the section to adjust its height; the focused divider also supports Up/Down and Home/End keys. The section shrinks automatically in shorter windows, leaving room for the finding cards. Height is retained while the pane stays open, including across collapse/expand.
+
+Successful manual reviews save automatically. Reopening an unchanged document restores the saved findings without contacting the model, labeled **Saved review** with the last run's scope and timestamp. The document, writing profile, analyzer versions, and relevant effective analysis settings must match exactly; otherwise, no saved findings are restored. Older cache-only sidecars become eligible after the next successful review. Dismissals remain session-only.
+
+Use the **History** icon beside the analyzer-settings button at the top of the right pane to see previous manual runs, newest first. It records time, scope, profile, force-rerun flag, each reviewer's version/model/server/options, accepted finding counts, and completion/warning/failure/cancellation outcomes. Completed reviewers also show cache hits and review-request counts; incomplete reviewers do not claim reliable request totals. Runs on earlier document content are marked accordingly. Opening history does not restore suggestions or modify the editor. Automatic local checks and saved-review restoration are not logged as new runs. For documents with a saved review but no run log, History recovers a clearly labeled **Recovered saved review** entry with the stored date, scope, profile, reviewers, and finding counts. This snapshot is not a reconstructed list of every earlier run: original model settings, request counts, duration, and force-rerun status were not saved and are not guessed. Older request caches alone cannot reconstruct a document's past runs; the empty-state message explains this distinction.
+
+History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
+
+The installed/source build's version is shown in **Settings → General** (currently **v0.1.1**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -170,14 +181,14 @@ my-project/
   notes.md
   .draftbench/
     project.json             Document IDs and profile presets
-    analysis.json            Bounded, disposable analysis cache
+    analysis.json            Bounded cache, saved reviews, and manual-run history
 ```
 
 Markdown is the source of truth. Project sidecars are optional and recoverable. File saves use a same-directory temporary file, flush, and atomic rename, retaining existing permissions where possible. A failed save keeps the dirty editor buffer. External changes are checked on save; no background filesystem watcher is implemented.
 
 Settings live in Tauri's OS app-config directory (for example `~/.config/org.draftbench.desktop/settings.json` on Linux). API keys use the OS credential store—Secret Service on Linux, Keychain on macOS, Credential Manager on Windows. If secure storage is unavailable, Draftbench warns and uses a **session-only** key; there is no plaintext fallback. Key changes apply when testing or saving and clear cached reviews, even if you later cancel other settings changes.
 
-**Analysis caches contain quotes/replacement text from your documents.** They are ordinary local sidecar files, not encrypted. Use **Settings → Analysis → Clear analysis cache** when needed; avoid publishing `.draftbench/analysis.json` if your writing is private. Keys and authorization headers never enter project files, settings JSON, or cache keys.
+**Analysis caches contain quotes/replacement text from your documents.** They are ordinary local sidecar files, not encrypted. Use **Settings → Analysis → Clear analysis cache** to remove cached reviews, saved findings, and the run history when needed; avoid publishing `.draftbench/analysis.json` if your writing is private. Keys and authorization headers never enter project files, settings JSON, or cache keys.
 
 Document text is sent only when you manually analyze it, and only to the endpoint you explicitly configure. No public AI URL is built in. There is no telemetry. Server errors are classified without echoing prompts or credentials into notifications/logs. Remote Markdown images/HTML are not loaded as resources.
 
@@ -211,7 +222,11 @@ An analyzer receives an immutable snapshot, structured blocks, a planned scope/c
 
 Diagnostics carry analyzer/version, stable finding identity, category/severity, explanation, block/range reference, optional fix/confidence, revision/content/context fingerprints, and engine/server/model provenance. Code blocks are never diagnostic targets by default; references and document-level reviewers can include them as bounded context.
 
-**Block persistence is intentionally simple:** IDs are stable within an editing session, including ordinary edits and split/paste operations. Changed source/context invalidates findings immediately. Live results from old documents/configurations cannot attach to a new session. Reloads create fresh block IDs and discard active findings—there is no fuzzy restoration. On an explicit later run, a cache hit is allowed only for identical structured target/context inputs and configuration; cached target indices are remapped to that exact request and quotes are resolved again. Persisted absolute editor ranges are never replayed.
+**Block persistence is intentionally simple:** IDs are stable within an editing session, including ordinary edits and split/paste operations. Changed source/context invalidates findings immediately. Live results from old documents/configurations cannot attach to a new session. Reloads create fresh block IDs and clear active findings/dismissals; a validated saved review can then be restored only for the exact document bytes, editor serialization, structured content, profile, and relevant analyzer configurations. Stored block indices and application-validated quote offsets are resolved against the new session, and dependency fingerprints are rebuilt. A mismatch rejects the whole saved review—there is no fuzzy reattachment or replay of absolute editor ranges.
+
+One latest successful review per document is retained, bounded to 50 documents / approximately 500 KB, with up to 1,000 findings per review. Failed, canceled, partially malformed, or document-changed runs do not replace it. Reviews of unsaved text become reopenable only after saving that exact content. A normal save may normalize formatting while retaining the matching review. Clear analysis cache removes request-cache entries, saved reviews, and run history; all are disposable, not an archival history.
+
+On an explicit later run, request-cache hits still require identical structured target/context inputs and configuration; cached target indices are remapped to that exact request and quotes are resolved again.
 
 AI results request JSON-schema output, fall back narrowly to JSON-object/plain JSON instructions for unsupported API features, validate the envelope and each issue, and reject unknown blocks, nonunique quotes, or out-of-scope passages. One reviewer failure does not crash the others. No silent rewrite or arbitrary-prose extraction is used.
 

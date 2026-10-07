@@ -1,23 +1,55 @@
 import { test, expect } from '@playwright/test'
+import packageMetadata from '../../package.json' with { type: 'json' }
+const appVersion = packageMetadata.version
 
 // Test-only native bridge. Nothing from this module is included in the app bundle.
-async function installDesktopFixture(page: import('@playwright/test').Page) {
-  await page.addInitScript(() => {
-    const files: Record<string, string> = {
+interface FixtureSeed {
+  files?: Record<string, string>
+  metadata?: Record<string, unknown>
+  settings?: unknown
+}
+async function installDesktopFixture(
+  page: import('@playwright/test').Page,
+  seed: FixtureSeed = {},
+) {
+  await page.addInitScript((seed: FixtureSeed) => {
+    const files: Record<string, string> = seed.files ?? {
       'essay.md':
         '# A better report\n\nThe the plan has merit.\n\nThis is unclear.\n\nA separate paragraph gives the reader context.\n',
     }
     const calls: { command: string; args: Record<string, unknown> }[] = []
-    const metadata: Record<string, unknown> = {}
-    let savedSettings: unknown = null
+    const pendingRequests = new Map<string, () => void>()
+    const metadata: Record<string, unknown> = seed.metadata ?? {}
+    let savedSettings: unknown = seed.settings ?? null
+    const fileHash = async (text: string) =>
+      Array.from(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
+        (b) => b.toString(16).padStart(2, '0'),
+      ).join('')
     const testWindow = window as unknown as {
       isTauri: boolean
       __TAURI_INTERNALS__: unknown
       __TAURI_EVENT_PLUGIN_INTERNALS__: unknown
-      fixture: { calls: typeof calls; files: typeof files }
+      fixture: {
+        calls: typeof calls
+        files: typeof files
+        metadata: typeof metadata
+        readonly settings: unknown
+        failReviews: boolean
+        pauseReviews: boolean
+      }
     }
     testWindow.isTauri = true
-    testWindow.fixture = { calls, files }
+    testWindow.fixture = {
+      calls,
+      files,
+      metadata,
+      failReviews: false,
+      pauseReviews: false,
+      get settings() {
+        return savedSettings
+      },
+    }
     testWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
     testWindow.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
@@ -46,10 +78,22 @@ async function installDesktopFixture(page: import('@playwright/test').Page) {
             children: [],
           }))
         if (command === 'read_document')
-          return { content: files[String(args.path)], hash: 'disk-hash' }
+          return {
+            content: files[String(args.path)],
+            hash: await fileHash(files[String(args.path)]),
+          }
         if (command === 'save_document') {
           files[String(args.path)] = String(args.content)
-          return 'saved-hash'
+          return fileHash(files[String(args.path)])
+        }
+        if (command === 'rename_entry') {
+          files[String(args.destination)] = files[String(args.path)]
+          delete files[String(args.path)]
+          return
+        }
+        if (command === 'cancel_request') {
+          pendingRequests.get(String(args.id))?.()
+          return
         }
         if (command === 'load_settings') return savedSettings
         if (command === 'save_settings') {
@@ -65,6 +109,7 @@ async function installDesktopFixture(page: import('@playwright/test').Page) {
         if (command === 'set_api_key') throw 'OS credential store unavailable; key is session-only.'
         if (command === 'ai_http') {
           const request = args.request as {
+            id: string
             route: string
             body: { model: string; messages: { content: string }[] }
           }
@@ -72,6 +117,15 @@ async function installDesktopFixture(page: import('@playwright/test').Page) {
             return { data: [{ id: 'qwen3-8b' }, { id: 'reviewer-14b' }] }
           const prompt = request.body.messages.at(-1)!.content
           if (prompt === 'Reply with OK.') return { choices: [{ message: { content: 'OK' } }] }
+          if (testWindow.fixture.failReviews)
+            throw { kind: 'server', message: 'Test server unavailable.' }
+          if (testWindow.fixture.pauseReviews)
+            await new Promise<void>((_resolve, reject) => {
+              pendingRequests.set(request.id, () => {
+                pendingRequests.delete(request.id)
+                reject({ kind: 'cancelled', message: 'Request cancelled.' })
+              })
+            })
           const input = JSON.parse(prompt)
           const block = input.targets.find((b: { text: string }) =>
             b.text.includes('This is unclear.'),
@@ -105,7 +159,7 @@ async function installDesktopFixture(page: import('@playwright/test').Page) {
         return 1
       },
     }
-  })
+  }, seed)
 }
 
 test('desktop shell: write, analyze, inspect, apply, undo, save and model override', async ({
@@ -299,6 +353,364 @@ test('expanded AI limits persist and notifications expire without manual dismiss
   await expect(page.locator('.notice')).toBeVisible()
   await page.clock.fastForward(1000)
   await expect(page.locator('.notice')).toHaveCount(0)
+})
+
+test('reopening restores an exact saved review without inference; edits/config changes reject it', async ({
+  page,
+  context,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toBeVisible()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { metadata: { analysis?: { reviews?: { reviews: unknown[] } } } }
+            }
+          ).fixture.metadata.analysis?.reviews?.reviews.length ?? 0,
+      ),
+    )
+    .toBe(1)
+  const seed = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        fixture: {
+          files: Record<string, string>
+          metadata: Record<string, unknown>
+          settings: unknown
+        }
+      }
+    ).fixture
+    return { files: fixture.files, metadata: fixture.metadata, settings: fixture.settings }
+  })
+  const openSaved = async (data: FixtureSeed) => {
+    const reopened = await context.newPage()
+    await installDesktopFixture(reopened, data)
+    await reopened.goto('/')
+    await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
+    await reopened.getByRole('button', { name: 'essay', exact: true }).click()
+    return reopened
+  }
+  const reopened = await openSaved(seed)
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await expect(
+    reopened.getByRole('button', { name: /Unclear referent hides the point/ }),
+  ).toBeVisible()
+  expect(
+    await reopened.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (call) => call.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+  await reopened.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(
+    reopened.getByRole('dialog', { name: 'Analysis history', exact: true }).locator('.history-run'),
+  ).toHaveCount(1)
+  await expect(reopened.locator('.history-reviewers')).toContainText('qwen3-8b')
+  await reopened.getByRole('button', { name: 'Close analysis history' }).click()
+  await reopened.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await reopened.getByRole('button', { name: 'Apply suggestion' }).click()
+  await expect(reopened.getByRole('textbox', { name: 'Document writing editor' })).toContainText(
+    'The proposal is unclear.',
+  )
+  await reopened.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(reopened.getByRole('textbox', { name: 'Document writing editor' })).toContainText(
+    'This is unclear.',
+  )
+  const changed = await openSaved({
+    ...seed,
+    files: { ...seed.files, 'essay.md': seed.files['essay.md'] + '\nAn external edit.\n' },
+  })
+  await expect(changed.locator('.analysis-status')).not.toContainText('Saved review')
+  await expect(
+    changed.getByRole('button', { name: /Unclear referent hides the point/ }),
+  ).toHaveCount(0)
+  const configured = await openSaved({ ...seed, settings: { ai: { model: 'another-model' } } })
+  await expect(configured.locator('.analysis-status')).not.toContainText('Saved review')
+  await expect(
+    configured.getByRole('button', { name: /Unclear referent hides the point/ }),
+  ).toHaveCount(0)
+  await reopened.close()
+  await changed.close()
+  await configured.close()
+})
+
+test('history shows manual/cache runs, follows renames, isolates copies, and never replays findings', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  const historyButton = page.getByRole('button', { name: 'Analysis history', exact: true })
+  await expect(historyButton).toBeDisabled()
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
+  await historyButton.click()
+  await expect(page.getByText('No run history is available yet.', { exact: false })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(historyButton).toBeFocused()
+  const review = async () => {
+    await page.locator('.run-controls summary').click()
+    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await expect(page.locator('.analysis-status')).toContainText('1 findings')
+    await expect(page.getByRole('button', { name: 'Analyze document', exact: true })).toBeVisible()
+  }
+  await review()
+  await review()
+  const before = await page.getByRole('textbox', { name: 'Document writing editor' }).innerText()
+  await historyButton.click()
+  const dialog = page.getByRole('dialog', { name: 'Analysis history', exact: true })
+  await expect(dialog.locator('.history-run')).toHaveCount(2)
+  await expect(dialog.locator('.history-run').first()).toContainText(
+    '4 cache hits · 0 review requests',
+  )
+  await expect(dialog.locator('.history-run').last()).toContainText(
+    '0 cache hits · 4 review requests',
+  )
+  await expect(dialog).toContainText('qwen3-8b')
+  await expect(dialog).toContainText('Document · General prose · 1 findings')
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  expect(await page.getByRole('textbox', { name: 'Document writing editor' }).innerText()).toBe(
+    before,
+  )
+  await page.getByRole('button', { name: 'Actions for essay.md' }).click()
+  await page.getByRole('button', { name: 'Rename', exact: true }).click()
+  const rename = page.getByRole('dialog', { name: 'Rename', exact: true })
+  await rename.getByRole('textbox').fill('renamed.md')
+  await rename.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.locator('.document-breadcrumb')).toContainText('renamed.md')
+  await historyButton.click()
+  await expect(dialog.locator('.history-run')).toHaveCount(2)
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  await page.locator('.document-heading-actions summary').click()
+  await page.getByRole('button', { name: 'Save a copy…' }).click()
+  const copy = page.getByRole('dialog', { name: 'Save a copy' })
+  await copy.getByRole('textbox').fill('copy.md')
+  await copy.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.locator('.document-breadcrumb')).toContainText('copy.md')
+  await historyButton.click()
+  await expect(dialog.locator('.history-run')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  await page.getByRole('button', { name: 'renamed', exact: true }).click()
+  await historyButton.click()
+  await expect(dialog.locator('.history-run')).toHaveCount(2)
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  await page.getByRole('button', { name: 'Configure analyzers', exact: true }).click()
+  await page.getByRole('button', { name: 'Clear analysis cache' }).click()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await historyButton.click()
+  await expect(dialog.locator('.history-run')).toHaveCount(0)
+})
+
+test('history records failed and cancelled runs, including cancellation on document switch', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { failReviews: boolean } }).fixture.failReviews = true
+  })
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-reviewers')).toContainText('Failed')
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as { fixture: { failReviews: boolean; pauseReviews: boolean } }
+    ).fixture
+    fixture.failReviews = false
+    fixture.pauseReviews = true
+  })
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('Reviewing with Clarity')
+  await page.getByRole('button', { name: 'Cancel analysis', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('Analysis cancelled')
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('Reviewing with Clarity')
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-run')).toHaveCount(3)
+  await expect(page.locator('.history-run').first()).toContainText('Cancelled')
+  await expect(page.locator('.history-run').nth(1)).toContainText('Cancelled')
+  await expect(page.locator('.history-run').last()).toContainText('Failed')
+})
+
+test('legacy saved findings recover a labeled history entry even without a valid request cache', async ({
+  page,
+  context,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('1 findings')
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { metadata: { analysis?: { reviews?: { reviews: unknown[] } } } }
+            }
+          ).fixture.metadata.analysis?.reviews?.reviews.length ?? 0,
+      ),
+    )
+    .toBe(1)
+  const seed = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        fixture: {
+          files: Record<string, string>
+          metadata: Record<string, unknown>
+          settings: unknown
+        }
+      }
+    ).fixture
+    return { files: fixture.files, metadata: fixture.metadata, settings: fixture.settings }
+  })
+  for (const cacheMode of ['valid', 'missing', 'corrupt', 'corrupt-history']) {
+    const legacy = structuredClone(seed)
+    const analysis = legacy.metadata.analysis as Record<string, unknown>
+    delete analysis.history
+    if (cacheMode === 'missing') delete analysis.cache
+    if (cacheMode === 'corrupt') analysis.cache = { version: 999 }
+    if (cacheMode === 'corrupt-history') analysis.history = { version: 999 }
+    const reopened = await context.newPage()
+    await installDesktopFixture(reopened, legacy)
+    await reopened.goto('/')
+    await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
+    await reopened.getByRole('button', { name: 'essay', exact: true }).click()
+    await expect(
+      reopened.getByRole('button', { name: /Unclear referent hides the point/ }),
+    ).toBeVisible()
+    await reopened.getByRole('button', { name: 'Analysis history', exact: true }).click()
+    const history = reopened.getByRole('dialog', { name: 'Analysis history', exact: true })
+    await expect(history.locator('.history-run')).toHaveCount(1)
+    await expect(history).toContainText('Recovered saved review')
+    await expect(history).toContainText('not a complete log of earlier runs')
+    await expect(history).toContainText('Model: not recorded')
+    await expect(history).not.toContainText('0 cache hits')
+    expect(
+      await reopened.evaluate(
+        () =>
+          (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+            (c) => c.command === 'ai_http',
+          ).length,
+      ),
+    ).toBe(0)
+    await expect
+      .poll(() =>
+        reopened.evaluate(
+          () =>
+            (
+              window as unknown as {
+                fixture: { metadata: { analysis?: { history?: { runs: { origin: string }[] } } } }
+              }
+            ).fixture.metadata.analysis?.history?.runs?.[0]?.origin,
+        ),
+      )
+      .toBe('saved-review')
+    await reopened.close()
+  }
+})
+
+test('review inspector resizes by drag/keyboard and collapses without losing the finding', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  const finding = page.getByRole('button', { name: /Unclear referent hides the point/ })
+  await finding.click()
+  const inspector = page.getByRole('region', { name: 'Review finding', exact: true })
+  const resize = page.getByRole('separator', { name: 'Resize review finding' })
+  await resize.focus()
+  await resize.press('Home')
+  const small = (await inspector.boundingBox())!.height
+  const handle = (await resize.boundingBox())!
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2 - 40, {
+    steps: 5,
+  })
+  await page.mouse.up()
+  await expect.poll(async () => (await inspector.boundingBox())!.height).toBeGreaterThan(small + 25)
+  const dragged = (await inspector.boundingBox())!.height
+  await resize.press('ArrowDown')
+  await expect
+    .poll(async () => Math.round((await inspector.boundingBox())!.height))
+    .toBe(Math.round(dragged - 20))
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  const before = await editor.innerText()
+  const cardsBefore = await page.locator('.findings-scroll').evaluate((el) => el.clientHeight)
+  await page.getByRole('button', { name: 'Collapse review finding' }).click()
+  await expect(page.getByRole('button', { name: 'Expand review finding' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  )
+  await expect(inspector.locator('.inspector-body')).not.toBeVisible()
+  await expect(page.locator('.finding-card.selected')).toHaveCount(1)
+  await expect
+    .poll(() => page.locator('.findings-scroll').evaluate((el) => el.clientHeight))
+    .toBeGreaterThan(cardsBefore + 80)
+  await page.getByRole('button', { name: 'Expand review finding' }).click()
+  await expect(inspector).toContainText('Name the proposal instead')
+  await page.setViewportSize({ width: 1280, height: 560 })
+  await expect.poll(async () => (await inspector.boundingBox())!.height).toBeLessThanOrEqual(150)
+  await page.getByRole('button', { name: 'Collapse review finding' }).click()
+  await finding.click()
+  await expect(page.getByRole('button', { name: 'Collapse review finding' })).toBeVisible()
+  expect(await editor.innerText()).toBe(before)
+  await page.getByRole('button', { name: 'Apply suggestion' }).click()
+  await expect(editor).toContainText('The proposal is unclear.')
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(editor).toContainText('This is unclear.')
+})
+
+test('Settings General shows the release version without changing preferences', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true })
+  await settings.getByRole('button', { name: 'General', exact: true }).click()
+  await expect(settings.locator('.app-version')).toContainText(`v${appVersion}`)
+  await expect(settings.locator('.app-version')).toContainText('Draftbench')
+  await expect(settings.locator('.app-version input')).toHaveCount(0)
+  await settings.getByRole('button', { name: 'Editor', exact: true }).click()
+  await settings.getByRole('button', { name: 'General', exact: true }).click()
+  await expect(settings.locator('.app-version')).toContainText(`v${appVersion}`)
+  await settings.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'save_settings',
+        ).length,
+    ),
+  ).toBe(0)
 })
 
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {
