@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { AI_LIMITS, defaultSettings, settingsSchema } from '../settings/model'
 
 describe('AI settings limits', () => {
+  it('defaults old settings to sequential jobs and validates the concurrency cap', () => {
+    expect(settingsSchema.parse({ version: 1 }).analysis.parallelJobs).toBe(1)
+    expect(settingsSchema.parse({ analysis: { parallelJobs: 8 } }).analysis.parallelJobs).toBe(8)
+    for (const parallelJobs of [0, 9, 1.5, '2', NaN])
+      expect(settingsSchema.safeParse({ analysis: { parallelJobs } }).success).toBe(false)
+  })
+  it('returns independent default settings objects', () => {
+    const first = defaultSettings()
+    first.analysis.parallelJobs = 3
+    first.analyzers.structure.model = 'custom'
+    first.ai.model = 'custom'
+    const second = defaultSettings()
+    expect(second.analysis.parallelJobs).toBe(1)
+    expect(second.analyzers.structure.model).toBe('')
+    expect(second.ai.model).toBe('qwen3-8b')
+  })
   it('allows a thirty-minute timeout and 32768 output tokens without changing defaults', () => {
     const defaults = defaultSettings()
     expect(defaults.ai.timeoutMs).toBe(120000)

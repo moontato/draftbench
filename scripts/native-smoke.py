@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
 BASE = os.environ.get('DRAFTBENCH_WEBDRIVER_URL', 'http://localhost:4444')
@@ -25,6 +25,9 @@ def webdriver(method, route, data=None):
         raise RuntimeError(value)
     return value
 
+review_lock = threading.Lock()
+review_stats = {'active': 0, 'peak': 0, 'requests': 0}
+
 class MockServer(BaseHTTPRequestHandler):
     def do_GET(self):
         assert self.path == '/v1/models'
@@ -34,12 +37,21 @@ class MockServer(BaseHTTPRequestHandler):
         assert self.path == '/v1/chat/completions'
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         assert data['model'] == 'mock-reviewer'
-        body = json.dumps({'choices': [{'message': {'content': '{"issues":[]}'}, 'finish_reason': 'stop'}]}).encode()
-        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(body)
+        with review_lock:
+            review_stats['active'] += 1
+            review_stats['requests'] += 1
+            review_stats['peak'] = max(review_stats['peak'], review_stats['active'])
+        try:
+            time.sleep(.15)  # Expose overlapping native requests without real inference.
+            body = json.dumps({'choices': [{'message': {'content': '{"issues":[]}'}, 'finish_reason': 'stop'}]}).encode()
+            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(body)
+        finally:
+            with review_lock:
+                review_stats['active'] -= 1
     def log_message(self, *args):
         pass
 
-server = HTTPServer(('127.0.0.1', 0), MockServer)
+server = ThreadingHTTPServer(('127.0.0.1', 0), MockServer)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 session = None
 try:
@@ -97,8 +109,10 @@ try:
         assert models['ok'] and models['value']['data'][0]['id'] == 'mock-reviewer', models
         complete = invoke('ai_http', {'request': {'id': 'native-review', 'serverUrl': endpoint, 'route': 'chat/completions', 'body': {'model': 'mock-reviewer', 'messages': [{'role': 'user', 'content': 'Review.'}]}, 'timeoutMs': 3000}})
         assert complete['ok'] and complete['value']['choices'][0]['message']['content'] == '{"issues":[]}', complete
-        assert invoke('save_document', {'path': 'reopen.md', 'content': source, 'expectedHash': None})['ok']
+        long_source = '# Native test\n\n' + '\n\n'.join([f'Paragraph {i}. ' + 'A' * 10000 for i in range(5)]) + '\n'
+        assert invoke('save_document', {'path': 'reopen.md', 'content': long_source, 'expectedHash': None})['ok']
         assert invoke('open_project', {'path': directory})['ok']
+        assert invoke('save_settings', {'value': {'version': 1, 'analysis': {'parallelJobs': 3, 'paragraphInputChars': 64000, 'documentInputChars': 120000}, 'ai': {'serverUrl': endpoint, 'model': 'mock-reviewer'}}})['ok']
         webdriver('DELETE', '/session/' + session)
         session = None
         value = webdriver('POST', '/session', {'capabilities': {'alwaysMatch': {'tauri:options': {'application': BINARY}}}})
@@ -119,10 +133,40 @@ try:
                 break
             time.sleep(.25)
         assert 'reopen' in text, text
-        assert invoke('read_document', {'path': 'reopen.md'})['value']['content'] == source
+        assert invoke('read_document', {'path': 'reopen.md'})['value']['content'] == long_source
+        assert invoke('use_session_key', {'key': ''})['ok']
+        def script(js):
+            return webdriver('POST', route + '/execute/sync', {'script': js, 'args': []})
+        assert script('const b = [...document.querySelectorAll("button")].find(b => b.textContent.trim() === "reopen"); if (!b) return false; b.click(); return true;')
+        for _ in range(40):
+            if script('return !!document.querySelector(`[aria-label="Document writing editor"]`)'):
+                break
+            time.sleep(.25)
+        assert script('return !!document.querySelector(`[aria-label="Document writing editor"]`)')
+        with review_lock:
+            review_stats['peak'] = 0
+            review_stats['requests'] = 0
+        assert script('const b = [...document.querySelectorAll("footer button")].find(b => b.textContent.includes("Analyze document")); if (!b) return false; b.click(); return true;')
+        for _ in range(80):
+            status = script('return document.querySelector(".analysis-status")?.textContent || ""')
+            if 'findings' in status and 'cached reviews' in status:
+                break
+            time.sleep(.1)
+        assert '0 findings' in status and 'warnings' not in status, status
+        with review_lock:
+            assert review_stats['active'] == 0 and review_stats['peak'] == 3 and review_stats['requests'] == 13, review_stats
+        assert script('const b = [...document.querySelectorAll("footer button")].find(b => b.textContent.includes("Analyze document")); b.click(); return true;')
+        for _ in range(40):
+            status = script('return document.querySelector(".analysis-status")?.textContent || ""')
+            if '19 cached reviews' in status:
+                break
+            time.sleep(.1)
+        assert '19 cached reviews' in status, status
+        with review_lock:
+            assert review_stats['requests'] == 13, review_stats
         assert invoke('remove_recent_project', {'path': canonical})['value'] == []
-        assert Path(directory, 'reopen.md').read_text() == source
-        print('PASS: real bundled desktop UI, IPC, recent projects across app restart/direct reopen (deduplication/failure/removal), local Markdown CRUD, conflict protection, path boundary, and native HTTP (mock compatible server).')
+        assert Path(directory, 'reopen.md').read_text() == long_source
+        print('PASS: real bundled desktop UI, IPC, recent projects across app restart/direct reopen (deduplication/failure/removal), local Markdown CRUD, conflict protection, path boundary, and configurable long-input budgets and bounded parallel review/cache reuse through native HTTP (mock compatible server).')
 finally:
     if session:
         webdriver('DELETE', '/session/' + session)

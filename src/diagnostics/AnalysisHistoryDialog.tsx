@@ -74,10 +74,22 @@ export function AnalysisHistoryDialog({
                     {run.reviewers.reduce((n, r) => n + r.findings, 0)}{' '}
                     {run.origin === 'saved-review' ? 'saved findings' : 'findings'}
                     {run.force ? ' · Force rerun' : ''}
+                    {run.parallelJobs !== undefined
+                      ? run.parallelJobs === 1
+                        ? ' · Sequential'
+                        : ` · Up to ${run.parallelJobs} parallel AI jobs`
+                      : ''}
                     {run.finishedAt !== null
                       ? ` · ${Math.max(0, (run.finishedAt - run.startedAt) / 1000).toFixed(1)}s`
                       : ''}
                   </p>
+                  {run.inputBudgets && (
+                    <p className="history-input-budgets">
+                      Input budgets: {run.inputBudgets.paragraphInputChars.toLocaleString()}{' '}
+                      paragraph/context · {run.inputBudgets.documentInputChars.toLocaleString()}{' '}
+                      document characters
+                    </p>
+                  )}
                   {run.origin === 'saved-review' && (
                     <p className="history-recovery-note">
                       Recovered from the last saved review, not a complete log of earlier runs. Its

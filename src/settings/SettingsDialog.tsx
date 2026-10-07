@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { CheckCircle2, ExternalLink, LoaderCircle, LockKeyhole, X } from 'lucide-react'
 import { analyzers } from '../analyzers/registry'
-import { AI_LIMITS, defaultSettings, type Settings } from './model'
+import {
+  AI_LIMITS,
+  MAX_PARALLEL_JOBS,
+  INPUT_BUDGET_LIMITS,
+  inputBudgetsSchema,
+  defaultSettings,
+  type Settings,
+} from './model'
 import { storage, errorMessage } from '../storage/desktop'
 import type { AIProvider } from '../ai/types'
 import { version as appVersion } from '../../package.json'
@@ -82,6 +89,11 @@ export function SettingsDialog({
     }
   }
   const save = async () => {
+    if (!inputBudgetsSchema.safeParse(draft.analysis).success) {
+      setFailed(true)
+      setResult('Input budgets must be whole numbers between 1,000 and 1,000,000 characters.')
+      return
+    }
     setSaving(true)
     const warning = await storeKey()
     try {
@@ -279,6 +291,80 @@ export function SettingsDialog({
                 <h3>Choose your analyzers</h3>
                 <p className="muted">
                   Semantic analysis runs only when requested. Rules can run locally as you write.
+                </p>
+                <label className="field">
+                  Parallel AI jobs
+                  <select
+                    value={draft.analysis.parallelJobs}
+                    onChange={(e) =>
+                      setDraft((old) => ({
+                        ...old,
+                        analysis: { ...old.analysis, parallelJobs: Number(e.target.value) },
+                      }))
+                    }
+                  >
+                    {Array.from({ length: MAX_PARALLEL_JOBS }, (_, index) => index + 1).map(
+                      (jobs) => (
+                        <option key={jobs} value={jobs}>
+                          {jobs}
+                          {jobs === 1 ? ' · sequential' : ''}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <p className="muted">
+                  Maximum simultaneous AI review requests, shared across reviewers and paragraphs.
+                  Parallel jobs are used only when all selected AI reviewers use the same server and
+                  model; mixed-model runs stay sequential. Start with 2 if your server supports
+                  parallel requests. More jobs can increase memory use; this does not configure
+                  server slots or download models.
+                </p>
+                <h3>Input budgets</h3>
+                <label className="field">
+                  Paragraph/context input budget (characters)
+                  <input
+                    type="number"
+                    min={INPUT_BUDGET_LIMITS.min}
+                    max={INPUT_BUDGET_LIMITS.max}
+                    step="1"
+                    value={draft.analysis.paragraphInputChars || ''}
+                    onChange={(e) =>
+                      setDraft((old) => ({
+                        ...old,
+                        analysis: { ...old.analysis, paragraphInputChars: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+                <p className="muted">
+                  Clarity paragraphs and Ambiguous reference paragraphs plus neighboring context.
+                </p>
+                <label className="field">
+                  Document input budget (characters)
+                  <input
+                    type="number"
+                    min={INPUT_BUDGET_LIMITS.min}
+                    max={INPUT_BUDGET_LIMITS.max}
+                    step="1"
+                    value={draft.analysis.documentInputChars || ''}
+                    onChange={(e) =>
+                      setDraft((old) => ({
+                        ...old,
+                        analysis: { ...old.analysis, documentInputChars: Number(e.target.value) },
+                      }))
+                    }
+                  />
+                </label>
+                <p className="muted">Whole-document Redundancy and Structure reviews.</p>
+                <p className="muted">
+                  Per-request source-text budgets, not word or token limits. Defaults: 12,000 and
+                  48,000 characters; allowed range: 1,000–1,000,000 each. Oversized requests are
+                  skipped, never truncated. Higher budgets must fit your server's context window
+                  with room for instructions and output tokens, and may increase latency and
+                  RAM/VRAM use—especially with parallel jobs. This does not enlarge the model's
+                  context window or split long documents into sections. Budget changes clear active
+                  AI findings; rerun analysis to reuse eligible cached results.
                 </p>
                 {analyzers.map((analyzer) => (
                   <section className="analyzer-setting" key={analyzer.id}>

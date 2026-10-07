@@ -2,9 +2,15 @@ import { z } from 'zod'
 import type { Analyzer } from './types'
 import type { Scope } from '../diagnostics/types'
 import { canonical, hash } from '../diagnostics/hash'
-import { effectiveConfig, type Settings } from '../settings/model'
+import {
+  effectiveConfig,
+  inputBudgetsSchema,
+  MAX_PARALLEL_JOBS,
+  type Settings,
+} from '../settings/model'
 import type { ProfileId } from '../profiles/profiles'
 import type { SavedReviewSummary } from './savedReviews'
+import { analysisParallelism } from './jobs'
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
 const count = z.number().int().nonnegative()
@@ -47,6 +53,8 @@ const runSchema = z.object({
   scope: z.enum(['selection', 'block', 'document']),
   profile: z.enum(['general', 'technical', 'essay', 'email']),
   force: z.boolean().nullable(),
+  parallelJobs: count.min(1).max(MAX_PARALLEL_JOBS).optional(),
+  inputBudgets: inputBudgetsSchema.optional(),
   origin: z.enum(['manual', 'saved-review']).default('manual'),
   status: z.enum(['running', 'completed', 'warnings', 'cancelled', 'interrupted', 'saved']),
   reviewers: z.array(reviewerSchema).min(1).max(50),
@@ -88,6 +96,8 @@ export class AnalysisHistory {
       scope,
       profile,
       force,
+      parallelJobs: analysisParallelism(analyzers, settings),
+      inputBudgets: inputBudgetsSchema.parse(settings.analysis),
       origin: 'manual',
       startedAt: Date.now(),
       finishedAt: null,
@@ -169,6 +179,7 @@ export class AnalysisHistory {
         finishedAt: null,
         scope: review.scope,
         profile: review.profile,
+        inputBudgets: review.inputBudgets,
         force: null,
         origin: 'saved-review',
         status: 'saved',

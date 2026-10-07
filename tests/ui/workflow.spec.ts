@@ -40,8 +40,10 @@ async function installDesktopFixture(
         files: typeof files
         metadata: typeof metadata
         readonly settings: unknown
-        failReviews: boolean
+        failReviews: boolean | string
         pauseReviews: boolean
+        reviewDelayMs: number
+        reviewConcurrency: { active: number; peak: number }
         readonly recentProjects: typeof recentProjects
       }
     }
@@ -52,6 +54,8 @@ async function installDesktopFixture(
       metadata,
       failReviews: false,
       pauseReviews: false,
+      reviewDelayMs: 0,
+      reviewConcurrency: { active: 0, peak: 0 },
       get settings() {
         return savedSettings
       },
@@ -150,43 +154,57 @@ async function installDesktopFixture(
             return { data: [{ id: 'qwen3-8b' }, { id: 'reviewer-14b' }] }
           const prompt = request.body.messages.at(-1)!.content
           if (prompt === 'Reply with OK.') return { choices: [{ message: { content: 'OK' } }] }
-          if (testWindow.fixture.failReviews)
-            throw { kind: 'server', message: 'Test server unavailable.' }
-          if (testWindow.fixture.pauseReviews)
-            await new Promise<void>((_resolve, reject) => {
-              pendingRequests.set(request.id, () => {
-                pendingRequests.delete(request.id)
-                reject({ kind: 'cancelled', message: 'Request cancelled.' })
-              })
-            })
-          const input = JSON.parse(prompt)
-          const block = input.targets.find((b: { text: string }) =>
-            b.text.includes('This is unclear.'),
+          if (
+            testWindow.fixture.failReviews === true ||
+            (typeof testWindow.fixture.failReviews === 'string' &&
+              request.body.messages[0].content.includes(testWindow.fixture.failReviews))
           )
-          return {
-            choices: [
-              {
-                message: {
-                  content: JSON.stringify({
-                    issues: block
-                      ? [
-                          {
-                            block_id: block.block_id,
-                            quote: 'This is unclear.',
-                            category: 'clarity',
-                            severity: 'warning',
-                            message: 'Unclear referent hides the point.',
-                            explanation: 'Name the proposal instead of using an unclear reference.',
-                            replacement: 'The proposal is unclear.',
-                            confidence: 0.87,
-                          },
-                        ]
-                      : [],
-                  }),
+            throw { kind: 'server', message: 'Test server unavailable.' }
+          const concurrency = testWindow.fixture.reviewConcurrency
+          concurrency.active++
+          concurrency.peak = Math.max(concurrency.peak, concurrency.active)
+          try {
+            if (testWindow.fixture.pauseReviews)
+              await new Promise<void>((_resolve, reject) => {
+                pendingRequests.set(request.id, () => {
+                  pendingRequests.delete(request.id)
+                  reject({ kind: 'cancelled', message: 'Request cancelled.' })
+                })
+              })
+            if (testWindow.fixture.reviewDelayMs)
+              await new Promise((resolve) => setTimeout(resolve, testWindow.fixture.reviewDelayMs))
+            const input = JSON.parse(prompt)
+            const block = input.targets.find((b: { text: string }) =>
+              b.text.includes('This is unclear.'),
+            )
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      issues: block
+                        ? [
+                            {
+                              block_id: block.block_id,
+                              quote: 'This is unclear.',
+                              category: 'clarity',
+                              severity: 'warning',
+                              message: 'Unclear referent hides the point.',
+                              explanation:
+                                'Name the proposal instead of using an unclear reference.',
+                              replacement: 'The proposal is unclear.',
+                              confidence: 0.87,
+                            },
+                          ]
+                        : [],
+                    }),
+                  },
+                  finish_reason: 'stop',
                 },
-                finish_reason: 'stop',
-              },
-            ],
+              ],
+            }
+          } finally {
+            concurrency.active--
           }
         }
         return 1
@@ -895,6 +913,384 @@ test('recent-list write failures do not prevent opening a project or erase exist
   await expect(page.locator('.notice')).toContainText(
     'Folder opened, but the recent project list could not be saved',
   )
+})
+
+test('parallel jobs persist, bound full-review requests, reuse cache, and preserve reviewed fixes', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await expect(page.getByLabel('Parallel AI jobs')).toHaveValue('1')
+  await page.getByLabel('Parallel AI jobs').selectOption('3')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await expect(page.getByLabel('Parallel AI jobs')).toHaveValue('3')
+  await page.getByRole('button', { name: 'Close settings' }).click()
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { reviewDelayMs: number } }).fixture.reviewDelayMs = 40
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            fixture: { reviewConcurrency: { active: number; peak: number } }
+          }
+        ).fixture.reviewConcurrency,
+    ),
+  ).toEqual({ active: 0, peak: 3 })
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-run')).toHaveCount(1)
+  await expect(page.locator('.history-summary')).toContainText('Up to 3 parallel AI jobs')
+  await expect(page.locator('.history-reviewers')).not.toContainText('Failed')
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  const calls = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          fixture: { calls: { command: string }[] }
+        }
+      ).fixture.calls.filter((c) => c.command === 'ai_http').length,
+  )
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('13 cached reviews')
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            fixture: { calls: { command: string }[] }
+          }
+        ).fixture.calls.filter((c) => c.command === 'ai_http').length,
+    ),
+  ).toBe(calls)
+  await page
+    .getByRole('button', { name: /Unclear referent hides the point/ })
+    .first()
+    .click()
+  await page.getByRole('button', { name: 'Apply suggestion' }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toContainText(
+    'The proposal is unclear.',
+  )
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toContainText(
+    'This is unclear.',
+  )
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await page
+    .locator('.analyzer-setting')
+    .filter({ has: page.locator('strong', { hasText: /^Redundancy$/ }) })
+    .getByRole('textbox')
+    .fill('reviewer-14b')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page.evaluate(() => {
+    const stats = (window as unknown as { fixture: { reviewConcurrency: { peak: number } } })
+      .fixture.reviewConcurrency
+    stats.peak = 0
+  })
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Force rerun all', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            fixture: { reviewConcurrency: { active: number; peak: number } }
+          }
+        ).fixture.reviewConcurrency,
+    ),
+  ).toEqual({ active: 0, peak: 1 })
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-summary').first()).toContainText('Sequential')
+})
+
+test('parallel cancellation aborts every active request, skips queued work, and allows a new run', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, { settings: { analysis: { parallelJobs: 3 } } })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { pauseReviews: boolean } }).fixture.pauseReviews = true
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { reviewConcurrency: { active: number } }
+            }
+          ).fixture.reviewConcurrency.active,
+      ),
+    )
+    .toBe(3)
+  await page.getByRole('button', { name: 'Cancel analysis', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('Analysis cancelled.')
+  expect(
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          fixture: {
+            calls: { command: string }[]
+            reviewConcurrency: { active: number }
+          }
+        }
+      ).fixture
+      return {
+        active: fixture.reviewConcurrency.active,
+        requests: fixture.calls.filter((c) => c.command === 'ai_http').length,
+        cancellations: fixture.calls.filter((c) => c.command === 'cancel_request').length,
+      }
+    }),
+  ).toEqual({ active: 0, requests: 3, cancellations: 3 })
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-outcome')).toContainText('Cancelled')
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { pauseReviews: boolean } }).fixture.pauseReviews = false
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  await expect(page.locator('.analysis-status')).not.toContainText('warnings')
+})
+
+test('a failed parallel reviewer does not stop the others or capture a partial saved review', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, { settings: { analysis: { parallelJobs: 3 } } })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as { fixture: { failReviews: boolean | string; reviewDelayMs: number } }
+    ).fixture
+    fixture.failReviews = 'Review clarity:'
+    fixture.reviewDelayMs = 30
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
+    2,
+  )
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { metadata: { analysis?: { reviews?: { reviews: unknown[] } } } }
+            }
+          ).fixture.metadata.analysis?.reviews?.reviews.length ?? 0,
+      ),
+    )
+    .toBe(0)
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  const reviewers = page.locator('.history-reviewers > li')
+  await expect(
+    reviewers.filter({ has: page.locator('strong', { hasText: /^Clarity$/ }) }),
+  ).toContainText('Failed')
+  await expect(
+    reviewers.filter({ has: page.locator('strong', { hasText: /^Ambiguous reference$/ }) }),
+  ).toContainText('Completed')
+  await expect(
+    reviewers.filter({ has: page.locator('strong', { hasText: /^Redundancy$/ }) }),
+  ).toContainText('Completed')
+})
+
+test('parallel responses after editing discard stale findings and cannot save a mismatched review', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, { settings: { analysis: { parallelJobs: 3 } } })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { reviewDelayMs: number } }).fixture.reviewDelayMs = 200
+  })
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { reviewConcurrency: { active: number } }
+            }
+          ).fixture.reviewConcurrency.active,
+      ),
+    )
+    .toBe(3)
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.fill('A completely different draft.')
+  await expect(page.locator('.analysis-status')).toContainText('stale results discarded')
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
+    0,
+  )
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: { metadata: { analysis?: { reviews?: { reviews: unknown[] } } } }
+            }
+          ).fixture.metadata.analysis?.reviews?.reviews.length ?? 0,
+      ),
+    )
+    .toBe(0)
+})
+
+test('input budgets validate, persist across restart, allow long essays, and gate cached requests', async ({
+  page,
+  context,
+}) => {
+  const longEssay =
+    '# A long essay\n\nThe the introduction has merit.\n\n' +
+    Array.from({ length: 5 }, () => 'A'.repeat(10000)).join('\n\n') +
+    '\n\nThis is unclear.\n'
+  await installDesktopFixture(page, { files: { 'essay.md': longEssay } })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Redundancy', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
+  await expect(page.locator('.notice')).toContainText('48,000-character document input budget')
+  await expect(page.locator('.notice')).toContainText('Settings → Analysis')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  const paragraph = page.getByLabel('Paragraph/context input budget (characters)')
+  const document = page.getByLabel('Document input budget (characters)')
+  await expect(paragraph).toHaveValue('12000')
+  await expect(document).toHaveValue('48000')
+  await document.fill('999')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(
+    page.getByText('Input budgets must be whole numbers between 1,000 and 1,000,000 characters.'),
+  ).toBeVisible()
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { fixture: { settings: unknown } }).fixture.settings,
+    ),
+  ).toBeNull()
+  await paragraph.fill('64000')
+  await document.fill('120000')
+  await page.getByLabel('Parallel AI jobs').selectOption('2')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  await expect(page.locator('.analysis-status')).not.toContainText('warnings')
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
+    3,
+  )
+  await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
+  await expect(page.locator('.history-input-budgets').first()).toContainText('64,000')
+  await expect(page.locator('.history-input-budgets').first()).toContainText('120,000')
+  await page.getByRole('button', { name: 'Close analysis history' }).click()
+  const calls = await page.evaluate(
+    () =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+        (c) => c.command === 'ai_http',
+      ).length,
+  )
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await document.fill('1000')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
+    0,
+  )
+  await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Redundancy', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
+  await expect(page.locator('.notice')).toContainText('1,000-character document input budget')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await document.fill('120000')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('cached reviews')
+  await expect(page.locator('.analysis-status')).not.toContainText('warnings')
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(calls)
+  const seed = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        fixture: {
+          files: Record<string, string>
+          metadata: Record<string, unknown>
+          settings: unknown
+        }
+      }
+    ).fixture
+    return { files: fixture.files, metadata: fixture.metadata, settings: fixture.settings }
+  })
+  const reopened = await context.newPage()
+  await installDesktopFixture(reopened, seed)
+  await reopened.goto('/')
+  await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
+  await reopened.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await reopened.getByRole('button', { name: 'Open settings' }).click()
+  await reopened.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await expect(reopened.getByLabel('Paragraph/context input budget (characters)')).toHaveValue(
+    '64000',
+  )
+  await expect(reopened.getByLabel('Document input budget (characters)')).toHaveValue('120000')
+  await expect(reopened.getByLabel('Parallel AI jobs')).toHaveValue('2')
+  await reopened.getByRole('button', { name: 'General', exact: true }).click()
+  await reopened.getByRole('button', { name: 'Restore defaults', exact: true }).click()
+  await reopened.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await expect(reopened.getByLabel('Paragraph/context input budget (characters)')).toHaveValue(
+    '12000',
+  )
+  await expect(reopened.getByLabel('Document input budget (characters)')).toHaveValue('48000')
+  await reopened.close()
 })
 
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {

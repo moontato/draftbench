@@ -9,17 +9,17 @@ Recorded on **2026-10-07**, in a Debian 12 x86-64 build environment. This is an 
 | `npm run typecheck` | Passed |
 | `npm run lint` | Passed |
 | `npm run format:check` | Passed |
-| `npm test` | **81 passed**, one opt-in real-server test skipped |
+| `npm test` | **100 passed**, one opt-in real-server test skipped |
 | `cargo test --locked --manifest-path src-tauri/Cargo.toml` | **11 passed** |
-| `npm run test:ui` | **16 passed** |
+| `npm run test:ui` | **21 passed** |
 | `npm audit` | Zero reported vulnerabilities at verification time |
 | `npm run tauri build` | Previously verified v0.1.0 optimized executable and Debian package |
-| `npm run tauri build -- --debug --no-bundle` | Last native-smoke-tested v0.1.2 debug desktop executable produced |
-| `scripts/native-smoke.py` against v0.1.2 debug executable | Passed in the actual bundled WebKit desktop, including restart/direct recent-folder reopening |
+| `npm run tauri build -- --debug --no-bundle` | Current v0.1.5 debug desktop executable produced |
+| `scripts/native-smoke.py` against v0.1.5 debug executable | Passed in the actual bundled WebKit desktop, including restart/direct recent-folder reopening and bounded parallel native review/cache reuse |
 
 The production build has nonfatal dependency annotation/chunk-size warnings. The editor/React/schema bundle is approximately 948 KB uncompressed / 297 KB gzip. Assets ship locally; these warnings do not imply hosted resources or runtime downloads.
 
-The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, unit tests, frontend workflows, Rust tests, and a native debug build. The v0.1.3 icon-configuration fix reran static checks, unit/UI tests, the frontend build, and Rust tests; its macOS DMG/installed icon has not been verified here. The current debug desktop was smoke-tested with a disposable app-config directory; it includes the saved-review/history/inspector changes as well. The optimized executable and Debian installer have not yet been rebuilt for v0.1.3.
+The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, unit tests, frontend workflows, Rust tests, and a native debug build. The v0.1.3 icon-configuration fix reran static checks, unit/UI tests, the frontend build, and Rust tests; its macOS DMG/installed icon has not been verified here. The v0.1.4 parallel-analysis follow-up reran static checks, unit/UI tests, Rust tests, a native debug build, and the actual WebKit smoke against a concurrent mock server. The current debug desktop was smoke-tested with a disposable app-config directory; it includes the saved-review/history/inspector changes as well. The v0.1.5 input-budget follow-up reran static checks, unit/UI tests, Rust tests, a native debug build, and WebKit smoke on a 50,000-plus-character document with persisted custom budgets. The optimized executable and Debian installer have not yet been rebuilt for v0.1.5. The user separately reported that the v0.1.3 icon fix resolved the installed macOS icon; this is not an automated macOS packaging/signing verification.
 
 ### What the tests establish
 
@@ -32,14 +32,16 @@ The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, uni
 - Saved reviews round-trip onto fresh block identities without inference, including exact selected-quote disambiguation and neighboring dependency invalidation. Changed documents, raw bytes, serialization, analyzer versions, profiles, enablement, models/options/credentials, and corrupt metadata are rejected. Zero-finding reviews persist; stale diagnostics cannot be captured; normalized saves only retain an exact matching review. A separate-window UI workflow verifies restoration, no AI request, reviewed Apply/Undo, and rejection after file/model changes.
 - Document history records manual runs, effective model overrides, options, zero-finding/cache-hit runs, warnings/failures/stale results, cancellations, and interrupted persisted runs. History is metadata-only, strips endpoint credentials/query/fragment, validates imports, rejects late updates to completed runs, and is bounded per document/project. UI workflows verify an empty history despite automatic local checks, cache-versus-request counts, no editor mutation, Escape/focus return, persistence across reopen, rename continuity, copy isolation, cache clearing, and cancellation during a document switch.
 - Legacy saved-review metadata without a run log is recovered into a labeled snapshot, without invented model/request/duration provenance or duplicate entries. Missing/corrupt request caches do not block valid history or saved reviews. UI tests verify migration with valid/missing/corrupt caches, saved findings still visible, no inference request, and recovered history persisted. Review finding supports pointer/keyboard resizing and reversible collapse; tests verify retained selection/content, increased card-list space, short-window bounds, reopening by card click, and unchanged Apply/Undo behavior.
-- Settings → General shows the read-only application version from package metadata (v0.1.3). Unit tests enforce matching npm/root-lock/Tauri/Cargo versions; a UI workflow verifies the version across tab switches without saving preferences.
+- Settings → General shows the read-only application version from package metadata (v0.1.5). Unit tests enforce matching npm/root-lock/Tauri/Cargo versions; a UI workflow verifies the version across tab switches without saving preferences.
 - Recent projects are recorded in app config only after successful native folder opens. Rust tests cover persistence, five-entry MRU ordering/deduplication, safe removal without deleting writing, missing-folder retention, size/version/corruption protection, and isolation from project data. UI tests cover startup listing, direct opens without the picker, restart persistence, missing/inaccessible folders, removal, picker opens, and nonfatal write failures. Native WebKit tests also restart the actual app and click its recent entry, verifying real project access.
+- Parallel AI jobs are configurable from 1–8, default to 1 when importing older settings, and require one effective server/model among selected AI reviewers. Unit tests verify a shared global cap across reviewers/paragraph units, sequential mixed-model fallback, stable result ordering, inference-free cache reuse after scheduling changes, force rerun, queued cancellation, rejection/draining after failure, and actual-limit history metadata without invented legacy values. UI tests verify settings persistence, parallel full reviews, mixed-model force reruns, cache reuse, reviewed Apply/Undo, cancellation of every active request/no queued requests, successful rerun after cancellation, failure isolation without capturing a partial saved review, and stale-result rejection after editing. Concurrent format-fallback responses cannot downgrade learned server capabilities.
+- Input budgets validate independently from 1,000–1,000,000 characters, retain defaults for older/parallel-only settings, count neighboring/code context, accept exact boundaries, and skip oversized units before cache lookup or inference. Raising budgets sends the entire oversized source without truncation; local checks remain unaffected. Tests cover cache reuse/force rerun, conservative budget-matched saved-review restoration and legacy-default compatibility, and known/unknown history metadata. The long-essay UI workflow covers invalid-save feedback, settings persistence across restart, successful review above the old cap, lowered-budget cache gating, preservation of local findings, exact saved restoration, and Restore defaults.
 - Bundle configuration explicitly names PNG, ICO, and macOS ICNS assets. Tests verify all paths exist and the ICNS container has valid chunk boundaries and a high-resolution icon. This validates checked-in packaging inputs, not macOS Finder/Dock rendering.
 - Settings allow 30-minute requests and 32,768 output tokens, with the same native timeout cap. Both error and success notifications expire after eight seconds, including repeated-message timer reset and early dismissal; the expanded settings and expiration are UI regression-tested.
 
 ### Native smoke test is not just a browser test
 
-The current v0.1.2 debug executable (and previously the v0.1.0 release executable) was launched through `tauri-driver` and WebKitWebDriver under D-Bus/Xvfb. The script verifies:
+The current v0.1.5 debug executable (and previously the v0.1.0 release executable) was launched through `tauri-driver` and WebKitWebDriver under D-Bus/Xvfb. The script verifies:
 
 1. Actual bundled application renders, identifies itself as Tauri (not browser preview), and supplies `crypto.randomUUID` for session identities.
 2. Real IPC opens a temporary ordinary project and saves/reads Markdown through Rust.
@@ -47,6 +49,7 @@ The current v0.1.2 debug executable (and previously the v0.1.0 release executabl
 4. Real folder/file creation, rename, listing, deletion, and nonempty-folder protection.
 5. Native Rust HTTP retrieves models and performs a completion against a temporary mock compatible server **without CORS headers**.
 6. Recent-folder IPC persists/deduplicates successful opens, leaves the list unchanged for a failed open, and removes an entry without deleting its files. After a full desktop-app restart, the startup list appears and clicking its entry opens the real project without a picker.
+7. Persisted settings with a three-job limit and 64,000 / 120,000-character input budgets survive that restart. A full review of a 50,000-plus-character document through the actual UI sends thirteen native AI requests across three reviewers to a concurrent mock server, with exactly three requests observed in flight at peak. An unchanged rerun uses nineteen cached units (including local checks), with no new HTTP request. This proves native transport overlap and bounded scheduling, not real-model throughput.
 
 The container's test-driver launcher used temporary WebKit compositor/sandbox environment overrides because the container cannot provide a normal desktop sandbox. These are **test-runner-only**, not application configuration; the production app does not disable its webview sandbox.
 
@@ -79,6 +82,7 @@ With your existing `llama-server`:
 10. Change Redundancy's model override to another **actually available** model. Verify it requests that ID and leaves the other reviewers on the default. On a single-model server, an unavailable ID may fail; the client does not switch/download models.
 11. Change the URL to your reachable Tailscale IP or hostname, such as `http://100.80.40.20:8080` or `http://gpu-box.tailnet-name.ts.net:8080`, and repeat the Clarity loop without enabling CORS.
 12. Exercise unreachable address, bad authentication, unavailable model, slow completion, malformed output, and unsupported API features. Error messages must remain actionable without exposing writing or authorization data.
+13. Configure the inference server's supported parallel slots, then set Settings → Analysis → Parallel AI jobs to 2 or 3. With one model selected, force a full review and check server logs for bounded overlapping requests. Compare total review time and memory use against a one-job run; do not assume linear speedup. Cancel and rerun. A mixed-model run must stay sequential and history must show its actual limit.
 
 An additional opt-in protocol-level check is available:
 
@@ -92,8 +96,8 @@ That test uses a Node-fetch adapter and a short fixture, **not production native
 ## Artifacts
 
 - Optimized Linux executable: `src-tauri/target/release/draftbench`
-- Last native-verified Debian package: `src-tauri/target/release/bundle/deb/Draftbench_0.1.0_amd64.deb` (approximately 4.3 MB). Current source is v0.1.3; rebuilding produces `Draftbench_0.1.3_amd64.deb`.
-- Last native-smoke-tested debug executable: `src-tauri/target/debug/draftbench` (v0.1.2)
+- Last native-verified Debian package: `src-tauri/target/release/bundle/deb/Draftbench_0.1.0_amd64.deb` (approximately 4.3 MB). Current source is v0.1.5; rebuilding produces `Draftbench_0.1.5_amd64.deb`.
+- Last native-smoke-tested debug executable: `src-tauri/target/debug/draftbench` (v0.1.5)
 - Architecture/setup/extensions/limitations: `README.md`
 
 Build artifacts are ignored by Git and reproducible from the checked-in lockfiles. No signing keys, API keys, user project files, or inference weights are included.

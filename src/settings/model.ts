@@ -1,5 +1,13 @@
 import { z } from 'zod'
 export const AI_LIMITS = { timeoutMs: 30 * 60 * 1000, maxTokens: 32768 } as const
+export const MAX_PARALLEL_JOBS = 8
+export const INPUT_BUDGET_LIMITS = { min: 1000, max: 1_000_000 } as const
+export const DEFAULT_INPUT_BUDGETS = { paragraphInputChars: 12000, documentInputChars: 48000 }
+const inputBudget = z.number().int().min(INPUT_BUDGET_LIMITS.min).max(INPUT_BUDGET_LIMITS.max)
+export const inputBudgetsSchema = z.object({
+  paragraphInputChars: inputBudget,
+  documentInputChars: inputBudget,
+})
 export const analyzerIds = [
   'repeated-word',
   'clarity',
@@ -31,6 +39,13 @@ export const settingsSchema = z.object({
       maxTokens: 2048,
       credentialGeneration: 0,
     }),
+  analysis: z
+    .object({
+      parallelJobs: z.number().int().min(1).max(MAX_PARALLEL_JOBS).default(1),
+      paragraphInputChars: inputBudget.default(DEFAULT_INPUT_BUDGETS.paragraphInputChars),
+      documentInputChars: inputBudget.default(DEFAULT_INPUT_BUDGETS.documentInputChars),
+    })
+    .default({ parallelJobs: 1, ...DEFAULT_INPUT_BUDGETS }),
   analyzers: z
     .record(z.string(), analyzerConfig)
     .default(Object.fromEntries(analyzerIds.map((id) => [id, { enabled: true, model: '' }]))),
@@ -48,8 +63,14 @@ export const settingsSchema = z.object({
 })
 export type Settings = z.infer<typeof settingsSchema>
 export type EffectiveConfig = Settings['ai']
+export type InputBudgets = z.infer<typeof inputBudgetsSchema>
+export function sameInputBudgets(a: InputBudgets, b: InputBudgets): boolean {
+  return (
+    a.paragraphInputChars === b.paragraphInputChars && a.documentInputChars === b.documentInputChars
+  )
+}
 export function defaultSettings(): Settings {
-  return settingsSchema.parse({})
+  return structuredClone(settingsSchema.parse({}))
 }
 export function effectiveConfig(settings: Settings, analyzerId: string): EffectiveConfig {
   return {

@@ -54,6 +54,27 @@ describe('OpenAI-compatible provider', () => {
     await provider.completeStructured(request, config, new AbortController().signal)
     expect(transport).toHaveBeenCalledTimes(4) // Capability remembered, not retried.
   })
+  it('does not downgrade a format fallback when an older concurrent response arrives late', async () => {
+    let finish!: (value: unknown) => void
+    const slow = new Promise<unknown>((resolve) => {
+      finish = resolve
+    })
+    const transport = vi
+      .fn<Transport>()
+      .mockImplementationOnce(() => slow)
+      .mockRejectedValueOnce(new ProviderError('format_unsupported', 'unsupported'))
+      .mockResolvedValue(completion())
+    const provider = new OpenAICompatibleProvider(transport)
+    const signal = new AbortController().signal
+    const first = provider.completeStructured(request, config, signal)
+    await provider.completeStructured(request, config, signal)
+    finish(completion())
+    await first
+    await provider.completeStructured(request, config, signal)
+    expect(transport.mock.calls.at(-1)?.[0].body).toMatchObject({
+      response_format: { type: 'json_object' },
+    })
+  })
   it('works without model discovery and does not send prose in connection tests', async () => {
     const transport = vi
       .fn<Transport>()

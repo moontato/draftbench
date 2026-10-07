@@ -189,7 +189,8 @@ export class OpenAICompatibleProvider implements AIProvider {
           },
           signal,
         )
-        this.formats.set(endpoint, format)
+        // Concurrent responses must not downgrade a fallback learned by another job.
+        this.formats.set(endpoint, Math.max(this.formats.get(endpoint) ?? 0, format))
         const response = completionSchema.safeParse(raw)
         if (!response.success)
           throw new ProviderError(

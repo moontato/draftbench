@@ -3,7 +3,14 @@ import { canonical, hash } from '../diagnostics/hash'
 import { refreshDiagnostic, resolveIssue } from '../diagnostics/mapping'
 import type { Diagnostic, Issue, Scope, Snapshot } from '../diagnostics/types'
 import { profiles, type ProfileId } from '../profiles/profiles'
-import { effectiveConfig, type Settings } from '../settings/model'
+import {
+  DEFAULT_INPUT_BUDGETS,
+  effectiveConfig,
+  inputBudgetsSchema,
+  sameInputBudgets,
+  type InputBudgets,
+  type Settings,
+} from '../settings/model'
 import { validateResult } from './llm/semantic'
 import { engineMetadata } from './runner'
 import type { Analyzer } from './types'
@@ -33,12 +40,14 @@ const reviewSchema = z.object({
   profile: z.enum(['general', 'technical', 'essay', 'email']),
   scope: z.enum(['selection', 'block', 'document']),
   analyzedAt: z.number().int().nonnegative().max(8_640_000_000_000_000),
+  inputBudgets: inputBudgetsSchema.optional(),
   sources: z.array(sourceSchema).min(1).max(50),
   findings: z.array(findingSchema).max(1000),
 })
 type SavedFinding = Omit<z.infer<typeof findingSchema>, 'issue'> & { issue: Issue }
 type SavedReview = Omit<z.infer<typeof reviewSchema>, 'findings'> & { findings: SavedFinding[] }
 export interface SavedReviewSummary {
+  inputBudgets?: InputBudgets
   documentId: string
   serializedHash: string
   analyzedAt: number
@@ -132,6 +141,7 @@ export class SavedReviews {
       profile,
       scope,
       analyzedAt: Date.now(),
+      inputBudgets: inputBudgetsSchema.parse(settings.analysis),
       sources,
       findings: saved,
     }
@@ -153,7 +163,11 @@ export class SavedReviews {
       record.documentHash !== input.hash ||
       record.markdownHash !== markdownHash ||
       record.serializedHash !== serializedHash ||
-      record.profile !== profile
+      record.profile !== profile ||
+      (!sameInputBudgets(record.inputBudgets ?? DEFAULT_INPUT_BUDGETS, settings.analysis) &&
+        record.sources.some(
+          (source) => this.analyzers.find((a) => a.id === source.id)?.engine === 'ai',
+        ))
     )
       return null
     for (const source of record.sources) {
@@ -246,6 +260,7 @@ export class SavedReviews {
       analyzedAt: review.analyzedAt,
       profile: review.profile,
       scope: review.scope,
+      inputBudgets: review.inputBudgets,
       sources: review.sources.map((source) => ({
         ...source,
         findings: review.findings.filter((f) => f.analyzerId === source.id).length,

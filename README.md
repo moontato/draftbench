@@ -4,7 +4,7 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.1.3 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.1.5 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
 ## What works
 
@@ -50,7 +50,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.1.3_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.1.5_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -107,7 +107,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.1.3**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
+The installed/source build's version is shown in **Settings → General** (currently **v0.1.5**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -185,6 +185,27 @@ Structure:            Default → qwen3-8b
 ```
 
 Set overrides in **Settings → Analysis**. You never re-enter the URL for each analyzer. Overriding a model does not download it or switch a single-model server automatically; that ID must be available on the configured server.
+
+### Input budgets
+
+**Settings → Analysis** provides two independent per-request source-text budgets:
+
+- **Paragraph/context input budget:** Clarity paragraphs and Ambiguous reference paragraphs plus neighboring context. Default **12,000 characters**.
+- **Document input budget:** Redundancy and Structure whole-document inputs, including code context. Default **48,000 characters**.
+
+Each accepts an integer from **1,000–1,000,000 characters**. Older settings receive the existing defaults; Restore defaults resets both. Counts use JavaScript string length (UTF-16 units), not words or model tokens, and exclude prompt/JSON overhead. Increasing a budget allows the complete source input to be sent; it does not enlarge a model's context window, change output-token settings, or split an essay into sections. Choose budgets that leave room for instructions and the requested output in your server's context window. Large inputs, especially with parallel jobs, may increase latency and RAM/VRAM use.
+
+Oversized AI units are skipped before cache lookup or inference, with a warning showing the actual input size, configured budget, and Settings path. No text is silently truncated. Local rules are unaffected. Budget changes cancel an active run and clear active AI findings; rerun analysis explicitly. Exact-input request-cache entries remain reusable when the new budget permits them, but automatic restoration of saved reviews containing AI reviews requires matching budgets. Older saved reviews remain eligible under the original defaults. History records new runs' budgets and preserves unknown budget metadata for older records.
+
+### Parallel review jobs
+
+**Settings → Analysis → Parallel AI jobs** sets a global per-run limit of **1–8 simultaneous AI review requests**; the default is **1 (sequential)**, including when loading older settings. It is shared across reviewers and paragraph jobs, not multiplied per reviewer. A single paragraph-oriented reviewer can use multiple jobs when reviewing a document. Local rules do not use AI request slots, and cache hits require no inference slot.
+
+Parallel execution is used only when every **selected, enabled, scope/profile-compatible AI reviewer** resolves to the same model on the same server. Blank overrides inherit the global model, and explicit overrides matching that model are eligible. Mixed-model runs remain fully sequential. Effective configurations and the job limit are captured at run start; changing settings cancels the run. History records the actual limit, but older/recovered records do not invent it.
+
+Start with **2** if your inference server supports concurrent requests. For llama.cpp, configure the server's supported parallel-slot setting (commonly `--parallel` / `-np`) separately; Draftbench does not configure slots or load models. Higher concurrency can increase KV-cache/RAM/VRAM pressure and is not guaranteed to improve speed if the server serializes requests internally. Timeouts begin when requests are sent, not while waiting for a Draftbench job slot.
+
+Cancel stops queued work and cancels all active review requests. In-flight jobs are drained before the run is completed; one reviewer's failure does not stop other reviewers. Exact mapping, stale-result checks, and reviewed fixes remain unchanged. Scheduling does not alter analyzer prompts or cache/saved-review identity, so changing only the job limit does not invalidate reusable reviews.
 
 Effective configuration is resolved once and shared by requests, provenance, freshness checks, and cache keys. Changing a model invalidates only that analyzer's applicable cache. Timeout/temperature/output-budget changes also change cache identity. The types can evolve to provider/server/prompt/scope overrides later without changing the editor or Problems panel.
 
@@ -329,7 +350,7 @@ XDG_CONFIG_HOME="$SMOKE_CONFIG" dbus-run-session -- xvfb-run -a tauri-driver --n
 python3 scripts/native-smoke.py
 ```
 
-This launches the bundled desktop and checks real IPC, scoped Markdown save/load, conflict protection, Rust HTTP against a mock compatible server without CORS headers, and recent-folder persistence/direct reopening across a full app restart. It does not prove model quality or real llama.cpp compatibility.
+This launches the bundled desktop and checks real IPC, scoped Markdown save/load, conflict protection, Rust HTTP against a mock compatible server without CORS headers, and recent-folder persistence/direct reopening across a full app restart. It also persists custom input budgets and a three-job setting across restart, runs a 50,000-plus-character document review through the real UI, verifies a three-request peak at the concurrent mock server, and verifies an unchanged rerun makes no new HTTP requests. It does not prove model quality or real llama.cpp compatibility.
 
 Optional real-server check (sends only a short test fixture to this explicitly configured endpoint):
 
@@ -345,7 +366,7 @@ The real-server test is skipped without `DRAFTBENCH_AI_BASE_URL`. Actual llama.c
 
 - One active document editor; no multi-document tabs, background file watcher, autosave, or fuzzy block restoration. Dismissals last for the current editing session and reset on document switch/reload; settings, profiles, and analysis caches persist.
 - Single-block plain-text fixes; broader structural changes remain report-only. Unsupported Markdown needs a converted copy.
-- Bounded paragraph/context inputs (12,000 characters) and document-level inputs (48,000 characters), with visible errors rather than truncation. No summarization/RAG/embeddings.
+- Configurable paragraph/context and document input budgets (defaults 12,000 / 48,000 characters), with visible warnings rather than truncation. No automatic section/chunk review, summarization/RAG/embeddings, tokenizer-based budgeting, or context-window discovery yet.
 - Semantic analysis is manual. False positives and imperfect replacements remain possible; confidence is the model's estimate, not calibrated probability.
 - Local HTTP connections and Linux packages were verified; real model responses, private-network deployment, OS credential-store persistence, other OS builds, and signing need suitable environments.
 - No proxy configuration UI. Native requests deliberately bypass environment proxies and reject redirects.

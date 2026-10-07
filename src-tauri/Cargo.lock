@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "draftbench"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",

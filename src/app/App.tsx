@@ -29,7 +29,13 @@ import {
   type FileEntry,
   type Project,
 } from '../storage/desktop'
-import { defaultSettings, effectiveConfig, settingsSchema, type Settings } from '../settings/model'
+import {
+  defaultSettings,
+  effectiveConfig,
+  sameInputBudgets,
+  settingsSchema,
+  type Settings,
+} from '../settings/model'
 import { SettingsDialog } from '../settings/SettingsDialog'
 import { WritingEditor } from '../editor/WritingEditor'
 import { snapshot } from '../editor/blocks'
@@ -47,6 +53,7 @@ import { refreshDiagnostic } from '../diagnostics/mapping'
 import type { Diagnostic, Snapshot, Scope } from '../diagnostics/types'
 import { analyzers } from '../analyzers/registry'
 import { planScope, runAnalyzer } from '../analyzers/runner'
+import { AnalysisJobs, analysisParallelism, mapConcurrent } from '../analyzers/jobs'
 import { AnalysisCache } from '../analyzers/cache'
 import { SavedReviews } from '../analyzers/savedReviews'
 import { AnalysisHistory } from '../analyzers/history'
@@ -644,7 +651,7 @@ export function App() {
   const run = async (scope: Scope = 'document', analyzerId?: string, force = false) => {
     const editor = editorRef.current,
       active = sessionRef.current
-    if (!editor || !active || busy || !settingsLoaded) return
+    if (!editor || !active || busy || running.current || !settingsLoaded) return
     const input = snapshot(editor, active.id, revision.current)
     if (scope !== 'selection') input.selection = undefined
     if (scope === 'selection' && !input.selection) {
@@ -661,6 +668,8 @@ export function App() {
       )
       return
     }
+    const runSettings = settingsRef.current
+    const jobs = new AnalysisJobs(analysisParallelism(targets, runSettings))
     const serializedHash = hash(writeMarkdown(active.source, editor.getMarkdown()))
     const markdownHash = dirtyRef.current ? serializedHash : active.diskHash
     let reviewedFindings = [...findings]
@@ -674,7 +683,7 @@ export function App() {
         profile,
         force,
         targets,
-        settingsRef.current,
+        runSettings,
       )
     } catch (error) {
       showNotice(errorMessage(error), true)
@@ -702,11 +711,21 @@ export function App() {
       hits = 0,
       discarded = 0
     const errors: string[] = []
-    for (const analyzer of targets) {
-      if (controller.signal.aborted) break
-      setStatus(`Reviewing with ${analyzer.name}…`)
+    const activeReviewers = new Set<string>()
+    const updateProgress = () => {
+      if (controller.signal.aborted || running.current !== controller) return
+      setStatus(
+        jobs.limit === 1
+          ? `Reviewing with ${[...activeReviewers][0] ?? 'reviewers'}…`
+          : `Reviewing · ${activeReviewers.size} active reviewers · up to ${jobs.limit} parallel AI jobs…`,
+      )
+    }
+    await mapConcurrent(targets, jobs.limit, async (analyzer) => {
+      if (controller.signal.aborted) return
+      activeReviewers.add(analyzer.name)
+      updateProgress()
       recordHistory(analyzer.id, { status: 'running' })
-      const config = effectiveConfig(settingsRef.current, analyzer.id),
+      const config = effectiveConfig(runSettings, analyzer.id),
         configHash = hash(canonical(config))
       try {
         const result = await runAnalyzer(
@@ -718,6 +737,8 @@ export function App() {
           controller.signal,
           cache.current,
           force,
+          jobs,
+          runSettings.analysis,
         )
         if (
           controller.signal.aborted ||
@@ -731,7 +752,7 @@ export function App() {
               requests: result.requests,
               discarded: result.findings.length,
             })
-          continue
+          return
         }
         const fresh = result.findings.flatMap((f) => {
           const refreshed = refreshDiagnostic(f, currentRef.current!)
@@ -771,8 +792,11 @@ export function App() {
           recordHistory(analyzer.id, { status: 'failed' })
           errors.push(`${analyzer.name}: ${errorMessage(error)}`)
         }
+      } finally {
+        activeReviewers.delete(analyzer.name)
+        updateProgress()
       }
-    }
+    })
     controller.signal.removeEventListener('abort', cancelHistory)
     history.current.finish(historyId, controller.signal.aborted)
     setHistoryRevision((old) => old + 1)
@@ -929,6 +953,7 @@ export function App() {
   }
   const saveSettings = async (next: Settings) => {
     const parsed = settingsSchema.parse(next)
+    const inputBudgetsChanged = !sameInputBudgets(settingsRef.current.analysis, parsed.analysis)
     await storage.saveSettings(parsed)
     settingsRef.current = parsed
     setSettings(parsed)
@@ -950,6 +975,7 @@ export function App() {
     setFindings((old) =>
       old.filter(
         (f) =>
+          (!inputBudgetsChanged || f.engine.kind !== 'ai') &&
           (parsed.analyzers[f.analyzerId]?.enabled ?? true) &&
           f.configurationHash === hash(canonical(effectiveConfig(parsed, f.analyzerId))),
       ),
