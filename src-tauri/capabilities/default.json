@@ -1,0 +1,11 @@
+{
+  "identifier": "main",
+  "description": "Desktop dialogs and app window events only; files and HTTP use scoped native commands.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "dialog:allow-open",
+    "dialog:allow-confirm"
+  ]
+}
