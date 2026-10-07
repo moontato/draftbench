@@ -9,17 +9,17 @@ Recorded on **2026-10-07**, in a Debian 12 x86-64 build environment. This is an 
 | `npm run typecheck` | Passed |
 | `npm run lint` | Passed |
 | `npm run format:check` | Passed |
-| `npm test` | **79 passed**, one opt-in real-server test skipped |
+| `npm test` | **81 passed**, one opt-in real-server test skipped |
 | `cargo test --locked --manifest-path src-tauri/Cargo.toml` | **11 passed** |
 | `npm run test:ui` | **16 passed** |
 | `npm audit` | Zero reported vulnerabilities at verification time |
 | `npm run tauri build` | Previously verified v0.1.0 optimized executable and Debian package |
-| `npm run tauri build -- --debug --no-bundle` | Current v0.1.2 debug desktop executable produced |
+| `npm run tauri build -- --debug --no-bundle` | Last native-smoke-tested v0.1.2 debug desktop executable produced |
 | `scripts/native-smoke.py` against v0.1.2 debug executable | Passed in the actual bundled WebKit desktop, including restart/direct recent-folder reopening |
 
 The production build has nonfatal dependency annotation/chunk-size warnings. The editor/React/schema bundle is approximately 948 KB uncompressed / 297 KB gzip. Assets ship locally; these warnings do not imply hosted resources or runtime downloads.
 
-The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, unit tests, frontend workflows, Rust tests, and a native debug build. The current debug desktop was smoke-tested with a disposable app-config directory; it includes the saved-review/history/inspector changes as well. The optimized executable and Debian installer have not yet been rebuilt for v0.1.2.
+The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, unit tests, frontend workflows, Rust tests, and a native debug build. The v0.1.3 icon-configuration fix reran static checks, unit/UI tests, the frontend build, and Rust tests; its macOS DMG/installed icon has not been verified here. The current debug desktop was smoke-tested with a disposable app-config directory; it includes the saved-review/history/inspector changes as well. The optimized executable and Debian installer have not yet been rebuilt for v0.1.3.
 
 ### What the tests establish
 
@@ -32,8 +32,9 @@ The v0.1.2 recent-projects follow-up reran TypeScript typecheck/lint/format, uni
 - Saved reviews round-trip onto fresh block identities without inference, including exact selected-quote disambiguation and neighboring dependency invalidation. Changed documents, raw bytes, serialization, analyzer versions, profiles, enablement, models/options/credentials, and corrupt metadata are rejected. Zero-finding reviews persist; stale diagnostics cannot be captured; normalized saves only retain an exact matching review. A separate-window UI workflow verifies restoration, no AI request, reviewed Apply/Undo, and rejection after file/model changes.
 - Document history records manual runs, effective model overrides, options, zero-finding/cache-hit runs, warnings/failures/stale results, cancellations, and interrupted persisted runs. History is metadata-only, strips endpoint credentials/query/fragment, validates imports, rejects late updates to completed runs, and is bounded per document/project. UI workflows verify an empty history despite automatic local checks, cache-versus-request counts, no editor mutation, Escape/focus return, persistence across reopen, rename continuity, copy isolation, cache clearing, and cancellation during a document switch.
 - Legacy saved-review metadata without a run log is recovered into a labeled snapshot, without invented model/request/duration provenance or duplicate entries. Missing/corrupt request caches do not block valid history or saved reviews. UI tests verify migration with valid/missing/corrupt caches, saved findings still visible, no inference request, and recovered history persisted. Review finding supports pointer/keyboard resizing and reversible collapse; tests verify retained selection/content, increased card-list space, short-window bounds, reopening by card click, and unchanged Apply/Undo behavior.
-- Settings → General shows the read-only application version from package metadata (v0.1.2). Unit tests enforce matching npm/root-lock/Tauri/Cargo versions; a UI workflow verifies the version across tab switches without saving preferences.
+- Settings → General shows the read-only application version from package metadata (v0.1.3). Unit tests enforce matching npm/root-lock/Tauri/Cargo versions; a UI workflow verifies the version across tab switches without saving preferences.
 - Recent projects are recorded in app config only after successful native folder opens. Rust tests cover persistence, five-entry MRU ordering/deduplication, safe removal without deleting writing, missing-folder retention, size/version/corruption protection, and isolation from project data. UI tests cover startup listing, direct opens without the picker, restart persistence, missing/inaccessible folders, removal, picker opens, and nonfatal write failures. Native WebKit tests also restart the actual app and click its recent entry, verifying real project access.
+- Bundle configuration explicitly names PNG, ICO, and macOS ICNS assets. Tests verify all paths exist and the ICNS container has valid chunk boundaries and a high-resolution icon. This validates checked-in packaging inputs, not macOS Finder/Dock rendering.
 - Settings allow 30-minute requests and 32,768 output tokens, with the same native timeout cap. Both error and success notifications expire after eight seconds, including repeated-message timer reset and early dismissal; the expanded settings and expiration are UI regression-tested.
 
 ### Native smoke test is not just a browser test
@@ -91,8 +92,8 @@ That test uses a Node-fetch adapter and a short fixture, **not production native
 ## Artifacts
 
 - Optimized Linux executable: `src-tauri/target/release/draftbench`
-- Last native-verified Debian package: `src-tauri/target/release/bundle/deb/Draftbench_0.1.0_amd64.deb` (approximately 4.3 MB). Current source is v0.1.2; rebuilding produces `Draftbench_0.1.2_amd64.deb`.
-- Current native-smoke-tested debug executable: `src-tauri/target/debug/draftbench` (v0.1.2)
+- Last native-verified Debian package: `src-tauri/target/release/bundle/deb/Draftbench_0.1.0_amd64.deb` (approximately 4.3 MB). Current source is v0.1.3; rebuilding produces `Draftbench_0.1.3_amd64.deb`.
+- Last native-smoke-tested debug executable: `src-tauri/target/debug/draftbench` (v0.1.2)
 - Architecture/setup/extensions/limitations: `README.md`
 
 Build artifacts are ignored by Git and reproducible from the checked-in lockfiles. No signing keys, API keys, user project files, or inference weights are included.

@@ -4,7 +4,7 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.1.2 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.1.3 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
 ## What works
 
@@ -50,7 +50,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.1.2_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.1.3_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -62,6 +62,29 @@ npm run tauri build -- --bundles dmg    # macOS
 ```
 
 Windows/macOS builds and signing are **not verified** in this environment. Linux native compilation, packaging, and a headless desktop smoke test have been verified. Packages are unsigned.
+
+### Installing or updating on macOS
+
+Build on a Mac with Node.js 24 LTS, stable Rust, and Apple's command-line tools (`xcode-select --install`). The checked-in bundle configuration explicitly includes `icons/icon.icns` for the app icon. To update a source checkout and generate a fresh installer:
+
+```sh
+git pull --ff-only
+npm ci
+npm run tauri build -- --bundles dmg
+```
+
+The generated installer is in `src-tauri/target/release/bundle/dmg/`. Build on Apple Silicon for an Apple Silicon app, or Intel for an Intel app. Quit the old Draftbench app, open the new DMG, drag **Draftbench.app** into **Applications**, and choose **Replace**. Eject the DMG and launch `/Applications/Draftbench.app`, not a copy left on the mounted installer. Check **Settings → General** for the new version. Updating source files alone does not update an installed app; there is no automatic updater.
+
+Replacing the app preserves your Markdown files, `.draftbench/` project data, and app-config settings/recent projects because the application identifier stays the same. These locally built packages are not signed/notarized for distribution; if macOS blocks a build you trust, use **System Settings → Privacy & Security → Open Anyway**.
+
+If a generic/old icon remains after replacing the app, it may be cached in the Dock/Finder. Remove its Dock shortcut and launch the Applications copy again, then choose Keep in Dock; logging out/in may also refresh it. To check whether the installed app actually contains its icon:
+
+```sh
+/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' /Applications/Draftbench.app/Contents/Info.plist
+ls /Applications/Draftbench.app/Contents/Resources/*.icns
+```
+
+The plist should name an icon resource that exists in `Contents/Resources`. If it is absent, rebuild from the updated configuration rather than deleting system-wide caches. macOS packaging/icon rendering remains unverified from this Linux environment.
 
 `npm run dev` is frontend tooling only. Its browser preview deliberately disables filesystem actions and identifies that native features require Tauri. It is not a hosted application or an alternate storage implementation.
 
@@ -84,7 +107,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.1.2**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
+The installed/source build's version is shown in **Settings → General** (currently **v0.1.3**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. Patch revisions increment this version without changing the settings or analysis-data schema versions.
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
