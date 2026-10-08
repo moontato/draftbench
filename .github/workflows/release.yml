@@ -1,0 +1,141 @@
+name: Release Draftbench
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify release tag and synchronized versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          npx tsx scripts/check-release-tag.ts "$RELEASE_TAG"
+          npm run typecheck
+          npm run lint
+          npm run format:check
+          npm test
+          npm run eval -- --dry-run
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+            asset-count: 2
+          - id: macos-universal
+            os: macos-15
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundles: dmg
+            asset-count: 1
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      BUILD_TARGET: ${{ matrix.target }}
+      BUNDLES: ${{ matrix.bundles }}
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - name: Linux native prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libfuse2 libxdo-dev xdg-utils
+      - run: npm ci
+      - name: Native regression tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build installers
+        # Ad-hoc signing lets Apple Silicon run the app; this is NOT Apple distribution signing/notarization.
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run tauri build -- --ci --target "$BUILD_TARGET" --bundles "$BUNDLES" -- --locked
+      - name: Collect and check installer assets
+        shell: bash
+        env:
+          EXPECTED_ASSETS: ${{ matrix.asset-count }}
+        run: |
+          shopt -s nullglob
+          bundle_dir="src-tauri/target/$BUILD_TARGET/release/bundle"
+          assets=("$bundle_dir"/deb/*.deb "$bundle_dir"/appimage/*.AppImage "$bundle_dir"/dmg/*.dmg)
+          if [[ "${#assets[@]}" -ne "$EXPECTED_ASSETS" ]]; then
+            echo "Expected $EXPECTED_ASSETS installers, found ${#assets[@]}" >&2
+            exit 1
+          fi
+          mkdir -p release-assets
+          for asset in "${assets[@]}"; do
+            test -s "$asset"
+            cp "$asset" release-assets/
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.id }}
+          path: release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: release-assets
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum -- *.deb *.AppImage *.dmg > SHA256SUMS
+      - name: Upload complete release, then publish
+        shell: bash
+        run: |
+          # New releases stay draft until every asset has been uploaded successfully.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "Draftbench $RELEASE_TAG" --generate-notes \
+              --notes 'Installers: Linux x86_64 (.deb or AppImage), macOS Universal (Apple Silicon + Intel DMG). macOS is ad-hoc signed only, not Developer ID signed or notarized; Gatekeeper may require Privacy & Security → Open Anyway for a build you trust. AppImage: chmod +x the downloaded file before running. SHA256SUMS contains installer checksums. This does not add an in-app updater.'
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false

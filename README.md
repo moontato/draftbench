@@ -68,6 +68,12 @@ npm run tauri build -- --bundles dmg    # macOS
 
 Windows/macOS builds and signing are **not verified** in this environment. Linux native compilation, packaging, and a headless desktop smoke test have been verified. Packages are unsigned.
 
+### Automated release builds
+
+Pushing a stable tag such as `v0.2.1` triggers `.github/workflows/release.yml`: checked Linux x86_64 **Debian + AppImage** builds and a macOS **Universal DMG** (Apple Silicon + Intel). The tag must match the application version. All checks/builds must pass before installers and `SHA256SUMS` are published to [GitHub Releases](https://github.com/moontato/draftbench/releases).
+
+macOS installers are ad-hoc signed only, **not Developer ID signed/notarized**; no Apple secrets are required. GitHub-hosted macOS packaging/publication remains unverified until the first successful tag run. See [release instructions](docs/releases.md) for setup, tagging, retries and limitations.
+
 ### Installing or updating on macOS
 
 Build on a Mac with Node.js 24 LTS, stable Rust, and Apple's command-line tools (`xcode-select --install`). The checked-in bundle configuration explicitly includes `icons/icon.icns` for the app icon. To update a source checkout and generate a fresh installer:
