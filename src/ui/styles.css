@@ -1404,6 +1404,9 @@ summary:hover .tree-action {
   color: #5a7848;
 }
 .settings-content {
+  border: 0;
+  margin: 0;
+  min-width: 0;
   padding: 26px 30px;
   overflow: auto;
   flex: 1;

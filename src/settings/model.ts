@@ -288,19 +288,74 @@ export function loadSettings(raw: unknown): {
   isolate('customAnalyzers', customAnalyzerSchema, BUILTIN_ANALYZER_IDS, 40)
   isolate('customProfiles', customProfileSchema, BUILTIN_PROFILE_IDS, 40)
   isolate('backends', backendSchema, [], 20)
+  const legacyFallback = (data.backends as Backend[]).find((b) => b.id === 'default') ?? aiDefaults
+  if (data.ai === undefined) data.ai = aiSchema.parse(legacyFallback)
+  const repairSection = (
+    key: string,
+    shape: Record<string, z.ZodType>,
+    fallback: Record<string, unknown> = {},
+  ) => {
+    if (data[key] === undefined) return
+    const raw = data[key]
+    const object =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+    if (object !== raw)
+      warnings.push(`${key}: corrupt options repaired; original retained until Save settings.`)
+    data[key] = Object.fromEntries(
+      Object.entries(shape).map(([field, schema]) => {
+        const parsed = schema.safeParse(
+          key === 'ai' && object[field] === undefined ? fallback[field] : object[field],
+        )
+        if (parsed.success) return [field, parsed.data]
+        warnings.push(
+          `${key}.${field}: invalid option repaired; original retained until Save settings.`,
+        )
+        return [field, schema.parse(fallback[field])]
+      }),
+    )
+  }
+  repairSection('ai', aiSchema.shape, legacyFallback)
+  for (const key of ['editor', 'analysis', 'general'] as const)
+    repairSection(key, schemaV2.shape[key].unwrap().shape)
+  let disableDefaultAI = false
+  const ai = aiSchema.parse(data.ai ?? {})
+  try {
+    normalizeBackendUrl(ai.serverUrl)
+  } catch {
+    ai.serverUrl = legacyFallback.serverUrl
+    disableDefaultAI = !(data.backends as Backend[]).some((b) => b.id === 'default')
+    warnings.push(
+      disableDefaultAI
+        ? 'Invalid Default backend URL; default-routed AI reviewers disabled until reconfigured.'
+        : 'Invalid Default backend URL; retained the saved Default backend address.',
+    )
+  }
+  data.ai = ai
   if (!(data.backends as Backend[]).length) {
     data.backends = [legacyBackend(aiSchema.parse(data.ai ?? {}))]
     warnings.push('No valid backend remained; legacy Default retained.')
   }
+  let disableInheritedAI = false
   if (!(data.backends as Backend[]).some((b) => b.id === data.defaultBackend)) {
     // Never redirect a formerly configured default's prose to a different server.
     const ai = aiSchema.parse(data.ai ?? {})
-    if (!(data.backends as Backend[]).some((b) => b.id === 'default'))
-      (data.backends as Backend[]).push(legacyBackend(ai))
-    data.defaultBackend = 'default'
-    warnings.push(
-      'Missing default backend: retained legacy Default. Review AI settings before analysis.',
-    )
+    if (
+      !(data.backends as Backend[]).some((b) => b.id === 'default') &&
+      (data.backends as Backend[]).length >= 20
+    ) {
+      data.defaultBackend = (data.backends as Backend[])[0].id
+      disableInheritedAI = true
+      warnings.push(
+        'Missing default backend at the backend limit; inherited AI reviewers disabled until reconfigured. Existing backends retained.',
+      )
+    } else {
+      if (!(data.backends as Backend[]).some((b) => b.id === 'default'))
+        (data.backends as Backend[]).push(legacyBackend(ai))
+      data.defaultBackend = 'default'
+      warnings.push(
+        'Missing default backend: retained legacy Default. Review AI settings before analysis.',
+      )
+    }
   }
   const profiles = [
     ...BUILTIN_PROFILE_IDS,
@@ -346,6 +401,17 @@ export function loadSettings(raw: unknown): {
     if (enabled.length !== profile.enabled.length)
       warnings.push(`${profile.name}: missing analyzer memberships removed.`)
     profile.enabled = enabled
+  }
+  if (disableDefaultAI || disableInheritedAI) {
+    const configs = (data.analyzers ?? {}) as Record<string, z.infer<typeof analyzerConfig>>
+    for (const id of ids.filter((id) => id !== 'harper' && id !== 'repeated-word')) {
+      if (
+        (disableDefaultAI && (configs[id]?.backend || data.defaultBackend) === 'default') ||
+        (disableInheritedAI && !configs[id]?.backend)
+      )
+        configs[id] = { ...configs[id], enabled: false, model: configs[id]?.model ?? '' }
+    }
+    data.analyzers = configs
   }
   const settings = settingsSchema.parse(data)
   return { settings, warnings, migrated }

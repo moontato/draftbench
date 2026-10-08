@@ -259,7 +259,14 @@ try:
         assert invoke('remove_recent_project', {'path': canonical})['value'] == []
         assert Path(directory, 'reopen.md').read_text() == long_source
         assert Path(directory, 'grammar.md').read_text() == grammar_source
-        print('PASS: real bundled WebKit/IPC, Markdown CRUD/conflicts/paths, persistent recents, v1→v2 migration, long-input budgets/cache, custom reviewers/profile across two native servers (global peak 3; backend peaks 1/2; isolated keys), and embedded Harper Unicode/code exclusion/mark-preserving Apply/Undo with no HTTP.')
+        with tempfile.TemporaryDirectory(prefix='draftbench-other-', dir=os.environ.get('TMPDIR')) as other:
+            assert invoke('open_project', {'path': other})['ok']
+            rejected = invoke('write_metadata', {'name': 'analysis', 'value': {'private': 'old project prose'}, 'projectRoot': canonical})
+            assert not rejected['ok'] and 'Project changed' in rejected['error'], rejected
+            assert not Path(other, '.draftbench').exists()
+            assert not invoke('read_metadata', {'name': 'analysis', 'projectRoot': canonical})['ok']
+            assert invoke('remove_recent_project', {'path': str(Path(other).resolve())})['value'] == []
+        print('PASS: project-pinned metadata refusal plus real bundled WebKit/IPC, Markdown CRUD/conflicts/paths, persistent recents, v1→v2 migration, long-input budgets/cache, custom reviewers/profile across two native servers (global peak 3; backend peaks 1/2; isolated keys), and embedded Harper Unicode/code exclusion/mark-preserving Apply/Undo with no HTTP.')
 finally:
     if session:
         webdriver('DELETE', '/session/' + session)

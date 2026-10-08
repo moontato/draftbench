@@ -255,6 +255,63 @@ it('warns about null/array analyzer options so a damaged legacy original is not 
     expect(loaded.warnings).toContain('Corrupt analyzer options isolated.')
   }
 })
+it('repairs unrelated damaged options without dropping valid v2 reviewers, profiles or backends', () => {
+  const original = setup().settings
+  const raw = {
+    ...original,
+    editor: { fontSize: 'bad', spellcheck: false },
+    analysis: { ...original.analysis, parallelJobs: 999 },
+    general: { defaultProfile: null },
+  }
+  const loaded = loadSettings(raw)
+  expect(loaded.settings.customAnalyzers).toEqual(original.customAnalyzers)
+  expect(loaded.settings.customProfiles).toEqual(original.customProfiles)
+  expect(loaded.settings.backends).toEqual(original.backends)
+  expect(loaded.settings.ai).toEqual(original.ai)
+  expect(loaded.settings.editor).toEqual({ fontSize: 18, spellcheck: false })
+  expect(loaded.settings.analysis.parallelJobs).toBe(1)
+  expect(loaded.settings.analysis.documentInputChars).toBe(original.analysis.documentInputChars)
+  expect(loaded.warnings.length).toBe(3)
+  expect(raw.editor.fontSize).toBe('bad')
+})
+it('preserves all twenty valid backends when the default reference is corrupt, without redirecting inherited prose', () => {
+  const raw = setup().settings
+  raw.backends = Array.from({ length: 20 }, (_, index) => ({
+    ...raw.backends[0],
+    id: `server-${index}`,
+    credentialRef: `backend:server-${index}`,
+    name: `Server ${index}`,
+  }))
+  raw.defaultBackend = 'missing-default'
+  raw.analyzers.clarity = { enabled: true, model: '', backend: 'server-1' }
+  const loaded = loadSettings(raw)
+  expect(loaded.settings.backends).toEqual(raw.backends)
+  expect(loaded.settings.customAnalyzers).toEqual(raw.customAnalyzers)
+  expect(loaded.settings.analyzers['ambiguous-reference'].enabled).toBe(false)
+  expect(loaded.settings.analyzers.clarity.enabled).toBe(true)
+  expect(loaded.warnings.join(' ')).toContain('inherited AI reviewers disabled')
+})
+it('reconstructs missing legacy alias fields from the saved Default endpoint/model, not another server', () => {
+  const raw = setup().settings
+  raw.backends[0].serverUrl = 'http://100.80.40.20:8080'
+  raw.backends[0].model = 'served-private-model'
+  const loaded = loadSettings({ ...raw, ai: { maxTokens: 3000 } })
+  expect(loaded.settings.ai.serverUrl).toBe(raw.backends[0].serverUrl)
+  expect(loaded.settings.ai.model).toBe('served-private-model')
+  expect(loaded.settings.ai.maxTokens).toBe(3000)
+})
+it('repairs an invalid AI alias from a known Default endpoint; otherwise disables default-routed reviewers', () => {
+  const raw = setup().settings
+  raw.ai.serverUrl = 'not a URL'
+  let loaded = loadSettings(raw)
+  expect(loaded.settings.ai.serverUrl).toBe(raw.backends[0].serverUrl)
+  expect(loaded.settings.customAnalyzers).toEqual(raw.customAnalyzers)
+  raw.backends = []
+  loaded = loadSettings(raw)
+  expect(loaded.settings.analyzers.clarity.enabled).toBe(false)
+  expect(loaded.settings.analyzers['buried-request'].enabled).toBe(false)
+  expect(loaded.warnings.join(' ')).toContain('disabled until reconfigured')
+})
 describe('configuration-driven reviewers use the production pipeline', () => {
   it('composes task instructions with schema/policy, maps findings, caches and restores onto fresh block IDs', async () => {
     const { settings, reviewer, registry } = setup(),

@@ -21,6 +21,10 @@ async function installDesktopFixture(
       'essay.md':
         '# A better report\n\nThe the plan has merit.\n\nThis is unclear.\n\nA separate paragraph gives the reader context.\n',
     }
+    let activeRoot = ''
+    let callbackId = 0
+    const callbacks = new Map<number, (event: unknown) => void>()
+    let closeHandler = 0
     const calls: { command: string; args: Record<string, unknown> }[] = []
     const pendingRequests = new Map<string, () => void>()
     const metadata: Record<string, unknown> = seed.metadata ?? {}
@@ -40,6 +44,11 @@ async function installDesktopFixture(
         files: typeof files
         metadata: typeof metadata
         readonly settings: unknown
+        saveDelayMs: number
+        openDelayMs: number
+        keyDelayMs: number
+        failSaves: boolean
+        requestClose: () => void
         failReviews: boolean | string
         pauseReviews: boolean
         reviewDelayMs: number
@@ -56,6 +65,17 @@ async function installDesktopFixture(
       calls,
       files,
       metadata,
+      saveDelayMs: 0,
+      openDelayMs: 0,
+      keyDelayMs: 0,
+      failSaves: false,
+      requestClose: () => {
+        callbacks.get(closeHandler)?.({
+          event: 'tauri://close-requested',
+          id: closeHandler,
+          payload: null,
+        })
+      },
       failReviews: false,
       pauseReviews: false,
       reviewDelayMs: 0,
@@ -70,12 +90,22 @@ async function installDesktopFixture(
     testWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
     testWindow.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
-      transformCallback: () => 1,
-      unregisterCallback: () => {},
+      transformCallback: (callback: (event: unknown) => void) => {
+        callbacks.set(++callbackId, callback)
+        return callbackId
+      },
+      unregisterCallback: (id: number) => {
+        callbacks.delete(id)
+      },
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
         calls.push({ command, args })
+        if (command === 'plugin:event|listen') {
+          if (args.event === 'tauri://close-requested') closeHandler = Number(args.handler)
+          return args.handler
+        }
         if (command === 'plugin:dialog|open') return '/writing'
         if (command === 'plugin:dialog|confirm') return true
+        if (command === 'plugin:dialog|message') return 'Ok'
         if (command === 'load_recent_projects') {
           const snapshot = structuredClone(recentProjects)
           if (seed.recentLoadDelayMs)
@@ -89,6 +119,8 @@ async function installDesktopFixture(
         }
         if (command === 'open_project') {
           const root = String(args.path)
+          if (testWindow.fixture.openDelayMs)
+            await new Promise((resolve) => setTimeout(resolve, testWindow.fixture.openDelayMs))
           if (seed.unavailableProjects?.includes(root)) throw 'Folder not found.'
           const name =
             root === '/writing' ? 'My writing' : root.split(/[\\/]/).filter(Boolean).at(-1)!
@@ -97,6 +129,7 @@ async function installDesktopFixture(
               { path: root, name, lastOpened: Date.now() },
               ...recentProjects.filter((project) => project.path !== root),
             ].slice(0, 5)
+          activeRoot = root
           return {
             root,
             name,
@@ -124,8 +157,20 @@ async function installDesktopFixture(
             hash: await fileHash(files[String(args.path)]),
           }
         if (command === 'save_document') {
+          if (testWindow.fixture.saveDelayMs)
+            await new Promise((resolve) => setTimeout(resolve, testWindow.fixture.saveDelayMs))
+          if (testWindow.fixture.failSaves) throw 'Could not safely save file: permission denied.'
+          const previous = files[String(args.path)]
+          if (previous !== undefined && args.expectedHash !== (await fileHash(previous)))
+            throw 'CONFLICT: File changed on disk. Reload it or save a copy.'
+          if (previous === undefined && args.expectedHash != null)
+            throw 'CONFLICT: File was removed on disk. Save a copy.'
           files[String(args.path)] = String(args.content)
           return fileHash(files[String(args.path)])
+        }
+        if (command === 'delete_entry') {
+          delete files[String(args.path)]
+          return
         }
         if (command === 'rename_entry') {
           files[String(args.destination)] = files[String(args.path)]
@@ -141,6 +186,12 @@ async function installDesktopFixture(
           savedSettings = args.value
           return
         }
+        if (
+          (command === 'read_metadata' || command === 'write_metadata') &&
+          args.projectRoot &&
+          args.projectRoot !== activeRoot
+        )
+          throw 'Project changed; metadata was not read or written.'
         if (command === 'read_metadata') return metadata[String(args.name)] ?? null
         if (command === 'write_metadata') {
           metadata[String(args.name)] = args.value
@@ -166,7 +217,11 @@ async function installDesktopFixture(
               ]
         }
         if (command === 'has_api_key') return false
-        if (command === 'set_api_key') throw 'OS credential store unavailable; key is session-only.'
+        if (command === 'set_api_key') {
+          if (testWindow.fixture.keyDelayMs)
+            await new Promise((resolve) => setTimeout(resolve, testWindow.fixture.keyDelayMs))
+          throw 'OS credential store unavailable; key is session-only.'
+        }
         if (command === 'ai_http') {
           const request = args.request as {
             id: string
@@ -1579,6 +1634,271 @@ test('custom reviewer validation, duplication, editing/deletion, and corrupt ent
   expect(saved.customProfiles).toEqual([])
 })
 
+async function patchFixture(
+  page: import('@playwright/test').Page,
+  values: Record<string, unknown>,
+) {
+  await page.evaluate(
+    (values) => Object.assign((window as unknown as { fixture: object }).fixture, values),
+    values,
+  )
+}
+async function closeFixture(page: import('@playwright/test').Page) {
+  await page.evaluate(() =>
+    (window as unknown as { fixture: { requestClose: () => void } }).fixture.requestClose(),
+  )
+}
+test('stabilization: copy/save/close locks preserve the draft and original; failed leave-save never switches', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    files: {
+      'essay.md': '# Essay\n\nOriginal writing.\n',
+      'other.md': '# Other\n\nOther writing.\n',
+    },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' Unsaved author text.')
+  await page.getByLabel('Document actions').click()
+  await page.getByRole('button', { name: 'Save a copy…' }).click()
+  const copy = page.getByRole('dialog', { name: 'Save a copy', exact: true })
+  await expect(copy).toBeVisible()
+  await page.keyboard.press('Control+s')
+  await closeFixture(page)
+  await expect(copy).toBeVisible()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'save_document',
+        ).length,
+    ),
+  ).toBe(0)
+  await copy.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await closeFixture(page)
+  await closeFixture(page)
+  const unsaved = page.getByRole('dialog', { name: 'Unsaved changes', exact: true })
+  await expect(unsaved).toHaveCount(1)
+  await unsaved.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.some((c) =>
+        c.command.includes('destroy'),
+      ),
+    ),
+  ).toBe(false)
+  await patchFixture(page, { failSaves: true })
+  await page.getByRole('button', { name: 'other', exact: true }).click()
+  await unsaved.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('permission denied')
+  await expect(editor).toContainText('Unsaved author text.')
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[
+          'essay.md'
+        ],
+    ),
+  ).toBe('# Essay\n\nOriginal writing.\n')
+  await patchFixture(page, { failSaves: false, saveDelayMs: 200 })
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await closeFixture(page)
+  await expect(page.getByRole('alert')).toContainText('before closing')
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[
+            'essay.md'
+          ],
+      ),
+    )
+    .toContain('Unsaved author text.')
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' More edits.')
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[
+      'essay.md'
+    ] = 'External revision.\n'
+  })
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('CONFLICT')
+  await expect(editor).toContainText('More edits.')
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[
+          'essay.md'
+        ],
+    ),
+  ).toBe('External revision.\n')
+})
+test('stabilization: deleting the active document cancels inference rather than leaving hidden requests', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await patchFixture(page, { pauseReviews: true })
+  await page.locator('.run-controls summary').click()
+  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { fixture: { reviewConcurrency: { active: number } } }).fixture
+            .reviewConcurrency.active,
+      ),
+    )
+    .toBeGreaterThan(0)
+  await page.getByRole('button', { name: 'Actions for essay.md' }).click()
+  await page
+    .getByRole('dialog', { name: 'File actions' })
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toHaveCount(0)
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { fixture: { reviewConcurrency: { active: number } } }).fixture
+            .reviewConcurrency.active,
+      ),
+    )
+    .toBe(0)
+  await expect(page.locator('.analysis-status')).toHaveText('Ready when you are.')
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.some(
+        (c) => c.command === 'cancel_request',
+      ),
+    ),
+  ).toBe(true)
+})
+test('stabilization: keyboard Save cannot race a pending project open', async ({ page }) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' Deliberately discarded text.')
+  await patchFixture(page, { openDelayMs: 1000 })
+  await page.getByRole('button', { name: 'Open another folder' }).click()
+  await page
+    .getByRole('dialog', { name: 'Unsaved changes' })
+    .getByRole('button', { name: 'Discard', exact: true })
+    .click()
+  await page.keyboard.press('Control+s')
+  await expect(editor).toHaveAttribute('contenteditable', 'false')
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'save_document',
+        ).length,
+    ),
+  ).toBe(0)
+  await expect(editor).toHaveCount(0)
+})
+test('stabilization: invalid settings never change keys; pending key updates freeze backend editing', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'AI', exact: true }).click()
+  await page.getByLabel('Server URL').fill('invalid-url')
+  await page.locator('.advanced summary').click()
+  await page.locator('input[type=password]').fill('test-private-key')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible()
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.some(
+        (c) => c.command === 'set_api_key',
+      ),
+    ),
+  ).toBe(false)
+  await page.getByLabel('Server URL').fill('http://localhost:8080')
+  await page.getByRole('button', { name: 'Backends', exact: true }).click()
+  await page.getByRole('button', { name: 'Add backend', exact: true }).click()
+  await page.locator('.management-editor details summary').click()
+  await page.getByLabel('Backend API key', { exact: true }).fill('isolated-test-key')
+  await patchFixture(page, { keyDelayMs: 300 })
+  await page.getByRole('button', { name: 'Store backend key' }).click()
+  await expect(page.getByLabel('Backend name', { exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Profiles', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeEnabled()
+  await expect(page.getByRole('alert')).toContainText('session-only')
+})
+test('stabilization: same-name reviewers remain separate and removed profile membership clears findings/filters', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    settings: {
+      version: 2,
+      customAnalyzers: [
+        {
+          id: 'other-clarity',
+          name: 'Clarity',
+          description: '',
+          instructions: 'Review unclear references.',
+          enabled: true,
+          scope: 'paragraph',
+          severity: 'warning',
+        },
+      ],
+      customProfiles: [
+        {
+          id: 'review-only',
+          name: 'Review only',
+          description: '',
+          enabled: ['clarity', 'other-clarity'],
+        },
+      ],
+      general: { defaultProfile: 'review-only' },
+    },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('contentinfo').getByRole('button', { name: 'Analyze document' }).click()
+  await expect(page.locator('.finding-group')).toHaveCount(2)
+  await expect(page.getByRole('heading', { name: 'Clarity (clarity)' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Clarity (other-clarity)' })).toBeVisible()
+  await page.getByLabel('Filter by analyzer').selectOption('other-clarity')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Profiles', exact: true }).click()
+  await page.getByRole('button', { name: 'Edit Review only', exact: true }).click()
+  await page
+    .getByRole('region', { name: 'Custom profile editor' })
+    .getByRole('checkbox')
+    .last()
+    .uncheck()
+  await page.getByRole('button', { name: 'Keep profile changes' }).click()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.locator('.finding-card')).toHaveCount(0) // Filtered reviewer was removed from membership.
+  await page.getByLabel('Filter by analyzer').selectOption('all')
+  await expect(page.locator('.finding-card')).toHaveCount(1)
+  await page.getByLabel('Filter by analyzer').selectOption('other-clarity')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await page.getByRole('button', { name: 'Delete Clarity', exact: true }).click()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await expect(page.getByLabel('Filter by analyzer')).toHaveValue('all')
+  await expect(page.locator('.finding-card')).toHaveCount(1)
+})
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText(/This is the frontend preview/)).toBeVisible()

@@ -76,6 +76,10 @@ export function useWorkspaceSession() {
     pendingRestore = useRef<string | null>(null),
     provider = useRef(new OpenAICompatibleProvider()),
     running = useRef<AbortController | null>(null)
+  const closePending = useRef(false)
+  const leavePending = useRef<Promise<boolean> | null>(null)
+  const askRef = useRef(ask)
+  askRef.current = ask
   const saveRef = useRef<() => Promise<boolean>>(async () => false),
     proceedRef = useRef<() => Promise<boolean>>(async () => true)
   const persistRef = useRef<() => Promise<void>>(async () => {})
@@ -106,17 +110,27 @@ export function useWorkspaceSession() {
     })
   const confirmLeave = async () => {
     if (!dirtyRef.current) return true
-    return new Promise<boolean>((resolve) => setUnsaved(() => resolve))
+    if (leavePending.current) return leavePending.current
+    leavePending.current = new Promise<boolean>((resolve) => setUnsaved(() => resolve)).finally(
+      () => {
+        leavePending.current = null
+      },
+    )
+    return leavePending.current
   }
   proceedRef.current = confirmLeave
   const persistAnalysis = async () => {
     if (project)
-      await storage.setMetadata('analysis', {
-        version: 2,
-        cache: cache.current.export(),
-        reviews: savedReviews.current.export(),
-        history: history.current.export(),
-      })
+      await storage.setMetadata(
+        'analysis',
+        {
+          version: 2,
+          cache: cache.current.export(),
+          reviews: savedReviews.current.export(),
+          history: history.current.export(),
+        },
+        project.root,
+      )
   }
   persistRef.current = persistAnalysis
   useEffect(() => {
@@ -137,10 +151,22 @@ export function useWorkspaceSession() {
     void getCurrentWindow()
       .onCloseRequested(async (event) => {
         event.preventDefault()
-        if (await proceedRef.current()) {
-          running.current?.abort()
-          await persistRef.current().catch(() => {})
-          await getCurrentWindow().destroy()
+        if (closePending.current) return
+        if (fileLock.current || saveLock.current || askRef.current) {
+          showNotice('Finish or cancel the current file operation before closing.', true)
+          return
+        }
+        closePending.current = true
+        try {
+          if (await proceedRef.current()) {
+            running.current?.abort()
+            await persistRef.current().catch(() => {})
+            await getCurrentWindow().destroy()
+          }
+        } catch (error) {
+          showNotice(errorMessage(error), true)
+        } finally {
+          closePending.current = false
         }
       })
       .then((unlisten) => {
@@ -204,7 +230,7 @@ export function useWorkspaceSession() {
       )
     else dismissNotice()
     try {
-      await storage.setMetadata('project', meta.current)
+      await storage.setMetadata('project', meta.current, project?.root)
     } catch {
       showNotice(
         'Document opened. Project metadata could not be saved; Markdown is unaffected.',
@@ -214,7 +240,16 @@ export function useWorkspaceSession() {
   }
   const openProject = async (path?: string) => {
     if (!(await confirmLeave())) return
-    running.current?.abort()
+    if (running.current) {
+      running.current.abort()
+      setStatus('Analysis cancelled.')
+    }
+    await persistAnalysis().catch(() =>
+      showNotice(
+        'Could not save the previous project’s analysis metadata. Markdown is unaffected.',
+        true,
+      ),
+    )
     running.current = null
     setBusy(false)
     let selectedProject: Project | null
@@ -251,7 +286,7 @@ export function useWorkspaceSession() {
     setDismissed(new Set())
     meta.current = { version: 2, documents: {} }
     try {
-      const raw = (await storage.metadata('project')) as ProjectMeta | null
+      const raw = (await storage.metadata('project', selectedProject.root)) as ProjectMeta | null
       if (
         raw &&
         (raw.version === 1 || raw.version === 2) &&
@@ -269,7 +304,7 @@ export function useWorkspaceSession() {
           )
             meta.current.documents[path] = doc
       }
-      const analysis = (await storage.metadata('analysis')) as {
+      const analysis = (await storage.metadata('analysis', selectedProject.root)) as {
         version: number
         cache: unknown
         reviews?: unknown
@@ -307,31 +342,35 @@ export function useWorkspaceSession() {
     const entries = await storage.list()
     setProject((old) => (old ? { ...old, entries } : null))
   }
-  const save = async (copy = false): Promise<boolean> => {
+  const save = async (copy = false, beforeLeave = false): Promise<boolean> => {
     const active = sessionRef.current,
       editor = editorRef.current
     if (saveLock.current) return false
+    if (fileLock.current && !beforeLeave) {
+      showNotice('Finish or cancel the current file operation before saving.', true)
+      return false
+    }
     if (!active || !editor) return true
     if (active.source.unsupported.length && !copy) {
       showNotice('This document is read-only. Save a converted copy to retain the original.', true)
       return false
     }
-    let path = active.path
-    if (copy) {
-      const answer = await askName(
-        'Save a copy',
-        'A relative .md path inside the open project. The original stays untouched.',
-        active.path.replace(/\.md$/i, '-copy.md'),
-      )
-      if (!answer) return false
-      path = answer.trim()
-      if (!/\.md$/i.test(path)) path += '.md'
-    }
-    const beforeRevision = revision.current
-    const content = writeMarkdown(active.source, editor.getMarkdown())
     saveLock.current = true
     setSaving(true)
     try {
+      let path = active.path
+      if (copy) {
+        const answer = await askName(
+          'Save a copy',
+          'A relative .md path inside the open project. The original stays untouched.',
+          active.path.replace(/\.md$/i, '-copy.md'),
+        )
+        if (!answer?.trim()) return false
+        path = answer.trim()
+        if (!/\.md$/i.test(path)) path += '.md'
+      }
+      const beforeRevision = revision.current
+      const content = writeMarkdown(active.source, editor.getMarkdown())
       const diskHash = await storage.save(path, content, copy ? null : active.diskHash)
       const unchanged = beforeRevision === revision.current
       const next = {
@@ -369,7 +408,7 @@ export function useWorkspaceSession() {
         await refreshTree()
       }
       try {
-        await storage.setMetadata('project', meta.current)
+        await storage.setMetadata('project', meta.current, project?.root)
         await persistAnalysis()
       } catch {
         showNotice('Markdown saved. Analysis metadata could not be saved.', true)
@@ -570,7 +609,7 @@ export function useWorkspaceSession() {
       setSession(next)
     }
     await refreshTree()
-    await storage.setMetadata('project', meta.current)
+    await storage.setMetadata('project', meta.current, project?.root)
   }
   const deleteEntry = async (entry: FileEntry) => {
     setEntryActions(null)
@@ -589,6 +628,12 @@ export function useWorkspaceSession() {
     }
     delete meta.current.documents[entry.path]
     if (session?.path === entry.path) {
+      running.current?.abort()
+      running.current = null
+      setBusy(false)
+      setStatus('')
+      setHistoryOpen(false)
+      pendingRestore.current = null
       editorRef.current = null
       setSession(null)
       sessionRef.current = null
@@ -598,7 +643,7 @@ export function useWorkspaceSession() {
       markDirty(false)
     }
     await refreshTree()
-    await storage.setMetadata('project', meta.current)
+    await storage.setMetadata('project', meta.current, project?.root)
   }
   const changeProfile = async (value: ProfileId) => {
     setProfile(value)
@@ -607,7 +652,7 @@ export function useWorkspaceSession() {
     setFindings([])
     if (session) {
       meta.current.documents[session.path] = { id: session.id, profile: value }
-      await storage.setMetadata('project', meta.current)
+      await storage.setMetadata('project', meta.current, project?.root)
     }
   }
   const saveSettings = async (next: Settings) => {
@@ -622,7 +667,7 @@ export function useWorkspaceSession() {
       if (sessionRef.current) {
         meta.current.documents[sessionRef.current.path].profile = nextProfile
         await storage
-          .setMetadata('project', meta.current)
+          .setMetadata('project', meta.current, project?.root)
           .catch(() =>
             showNotice(
               'Settings saved, but the document profile metadata could not be saved.',
@@ -652,7 +697,7 @@ export function useWorkspaceSession() {
       old.filter(
         (f) =>
           (!inputBudgetsChanged || f.engine.kind !== 'ai') &&
-          (parsed.analyzers[f.analyzerId]?.enabled ?? true) &&
+          analyzerEnabled(parsed, f.analyzerId, nextProfile) &&
           nextAnalyzers.some((a) => a.id === f.analyzerId && a.version === f.analyzerVersion) &&
           f.configurationHash === configurationHash(effectiveConfig(parsed, f.analyzerId)),
       ),
@@ -708,6 +753,7 @@ export function useWorkspaceSession() {
     removeRecentProject,
     openProject,
     save,
+    saveBeforeLeave: () => save(false, true),
     onReady,
     onChange,
     enabled,

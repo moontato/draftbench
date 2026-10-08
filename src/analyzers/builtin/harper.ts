@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { z } from 'zod'
 import type { Analyzer } from '../types'
+import { AnalysisJobs } from '../jobs'
+// Native lints cannot be interrupted mid-call. Share one CPU lane across automatic
+// and manual checks, and remove obsolete queued calls before they reach IPC.
+const grammarJobs = new AnalysisJobs(1)
 
 const findingSchema = z.object({
   offset: z.number().int().nonnegative(),
@@ -28,7 +32,9 @@ export const harper: Analyzer = {
       warnings: string[] = []
     for (const block of unit.targets) {
       if (signal.aborted) throw new Error('Analysis cancelled.')
-      const raw = await invoke<unknown>('harper_review', { text: block.text })
+      const raw = await grammarJobs.run(signal, () =>
+        invoke<unknown>('harper_review', { text: block.text }),
+      )
       if (signal.aborted) throw new Error('Analysis cancelled.')
       const findings = z.array(findingSchema).max(501).parse(raw)
       if (findings.length > 500)

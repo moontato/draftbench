@@ -46,6 +46,15 @@ export function ProblemsPanel(props: Props) {
   useEffect(() => {
     setCollapsed(false)
   }, [props.selected])
+  useEffect(() => {
+    if (filter !== 'all' && !props.analyzers.some((a) => a.id === filter)) setFilter('all')
+    if (category !== 'all' && !props.findings.some((f) => f.category === category))
+      setCategory('all')
+  }, [props.analyzers, props.findings, filter, category])
+  const analyzerLabel = (analyzer: Analyzer) =>
+    props.analyzers.filter((a) => a.name === analyzer.name).length > 1
+      ? `${analyzer.name} (${analyzer.id})`
+      : analyzer.name
   const visible = props.findings.filter(
     (f) =>
       (showDismissed || !props.dismissed.has(f.id)) &&
@@ -62,13 +71,18 @@ export function ProblemsPanel(props: Props) {
     )) {
       const key =
         group === 'analyzer'
-          ? (props.analyzers.find((a) => a.id === finding.analyzerId)?.name ?? finding.analyzerId)
+          ? finding.analyzerId
           : group === 'severity'
             ? finding.severity
             : `Passage ${finding.blockIndex + 1}`
-      result.set(key, [...(result.get(key) ?? []), finding])
+      const list = result.get(key)
+      if (list) list.push(finding)
+      else result.set(key, [finding])
     }
-    return [...result]
+    return [...result].map(([key, findings]) => {
+      const analyzer = group === 'analyzer' ? props.analyzers.find((a) => a.id === key) : undefined
+      return { key, findings, label: analyzer ? analyzerLabel(analyzer) : key }
+    })
   }, [visible, group, props.analyzers])
   const original = props.findings.find((f) => f.id === props.selected)
   const chosen = original?.replacements?.length
@@ -115,7 +129,7 @@ export function ProblemsPanel(props: Props) {
           <option value="all">All analyzers</option>
           {props.analyzers.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.name}
+              {analyzerLabel(a)}
             </option>
           ))}
         </select>
@@ -177,8 +191,8 @@ export function ProblemsPanel(props: Props) {
               </button>
             </div>
           )}
-          {groups.map(([label, findings]) => (
-            <section className="finding-group" key={label}>
+          {groups.map(({ key, label, findings }) => (
+            <section className="finding-group" key={key}>
               <h3>
                 {label}
                 <span>{findings.length}</span>
@@ -186,6 +200,7 @@ export function ProblemsPanel(props: Props) {
               {findings.map((f) => (
                 <button
                   key={f.id}
+                  aria-pressed={props.selected === f.id}
                   className={`finding-card ${props.selected === f.id ? 'selected' : ''} ${props.dismissed.has(f.id) ? 'dismissed' : ''}`}
                   onClick={() => {
                     setCollapsed(false)
@@ -278,6 +293,7 @@ export function ProblemsPanel(props: Props) {
               )}
               <button
                 className="engine-toggle text-button"
+                aria-expanded={engineOpen}
                 onClick={() => setEngineOpen(!engineOpen)}
               >
                 Analyzer & engine <ChevronDown size={13} />

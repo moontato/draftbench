@@ -158,11 +158,17 @@ fn delete_entry(path: String, state: State<DesktopState>) -> Result<(), String> 
     .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn read_metadata(name: String, state: State<DesktopState>) -> Result<Option<Value>, String> {
+fn read_metadata(
+    name: String,
+    project_root: Option<String>,
+    state: State<DesktopState>,
+) -> Result<Option<Value>, String> {
     if !matches!(name.as_str(), "project" | "analysis") {
         return Err("Invalid metadata name".into());
     }
-    let path = storage::scoped(&root(&state)?, &format!(".draftbench/{name}.json"))?;
+    let root = root(&state)?;
+    storage::check_project_root(&root, project_root.as_deref())?;
+    let path = storage::scoped(&root, &format!(".draftbench/{name}.json"))?;
     if !path.exists() {
         return Ok(None);
     }
@@ -174,11 +180,17 @@ fn read_metadata(name: String, state: State<DesktopState>) -> Result<Option<Valu
         .map_err(|_| "Project metadata is corrupt; a fresh analysis can safely replace it.".into())
 }
 #[tauri::command]
-fn write_metadata(name: String, value: Value, state: State<DesktopState>) -> Result<(), String> {
+fn write_metadata(
+    name: String,
+    value: Value,
+    project_root: Option<String>,
+    state: State<DesktopState>,
+) -> Result<(), String> {
     if !matches!(name.as_str(), "project" | "analysis") {
         return Err("Invalid metadata name".into());
     }
     let root = root(&state)?;
+    storage::check_project_root(&root, project_root.as_deref())?;
     let dir = storage::scoped(&root, ".draftbench")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = storage::scoped(&root, &format!(".draftbench/{name}.json"))?;

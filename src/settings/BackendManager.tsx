@@ -16,7 +16,7 @@ interface Props {
   provider: AIProvider
   onCredentialChange: (id?: string) => void | Promise<void>
   onWarning: (message: string) => void
-  onBusyChange: (busy: boolean) => void
+  onBusyChange: (busy: boolean, storingKey?: boolean) => void
 }
 export function BackendManager({
   draft,
@@ -30,13 +30,15 @@ export function BackendManager({
   const [key, setKey] = useState(''),
     [hasKey, setHasKey] = useState(false),
     [busy, setBusy] = useState(false),
-    [message, setMessage] = useState('')
+    [message, setMessage] = useState(''),
+    [storingKey, setStoringKey] = useState(false)
+  const operation = useRef(false)
   const connection = useRef<AbortController | null>(null)
   useEffect(() => () => connection.current?.abort(), [])
   useEffect(() => {
-    onBusyChange(busy)
-    return () => onBusyChange(false)
-  }, [busy, onBusyChange])
+    onBusyChange(busy, storingKey)
+    return () => onBusyChange(false, false)
+  }, [busy, storingKey, onBusyChange])
   const stored = draft.backends.find((b) => b.id === selected) ?? draft.backends[0]
   const backend = stored.id === 'default' ? { ...stored, ...draft.ai } : stored
   useEffect(() => {
@@ -92,6 +94,9 @@ export function BackendManager({
     // Deletion never silently modifies an OS credential. Remove it explicitly first.
   }
   const storeKey = async (value: string) => {
+    if (operation.current) return
+    operation.current = true
+    setStoringKey(true)
     setBusy(true)
     setMessage('')
     let warning = ''
@@ -108,11 +113,15 @@ export function BackendManager({
     patch({ credentialGeneration: backend.credentialGeneration + 1 })
     setKey('')
     setHasKey(!!value)
+    operation.current = false
+    setStoringKey(false)
     setBusy(false)
     if (warning) onWarning(warning)
     setMessage(warning || 'Backend key updated. No key is stored in settings.')
   }
   const test = async () => {
+    if (operation.current) return
+    operation.current = true
     setBusy(true)
     setMessage('')
     const controller = new AbortController()
@@ -126,6 +135,7 @@ export function BackendManager({
     } catch (error) {
       setMessage(errorMessage(error))
     } finally {
+      operation.current = false
       setBusy(false)
     }
   }

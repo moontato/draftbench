@@ -4,7 +4,9 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.0 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+
+v0.2.1 is a stabilization release: safer save/copy/close sequencing, project-pinned metadata, non-destructive configuration repair, validated/locked credential operations, bounded Harper work, and focused diagnostic/accessibility polish. No new product capabilities or schema changes. See [stabilization findings and verification](docs/stabilization-v021.md).
 
 ## What works
 
@@ -53,7 +55,7 @@ Build an installable Linux package:
 
 ```sh
 npm run tauri build
-# src-tauri/target/release/bundle/deb/Draftbench_0.2.0_amd64.deb
+# src-tauri/target/release/bundle/deb/Draftbench_0.2.1_amd64.deb
 # Executable: src-tauri/target/release/draftbench
 ```
 
@@ -110,7 +112,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.0**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.1**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 

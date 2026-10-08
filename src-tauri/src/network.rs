@@ -98,6 +98,9 @@ pub async fn execute(
     key: Option<String>,
     cancel: CancellationToken,
 ) -> Result<Value, NetworkError> {
+    if cancel.is_cancelled() {
+        return Err(NetworkError::new("cancelled", "Request cancelled.", None));
+    }
     let url = endpoint(&request.server_url, &request.route)?;
     // No redirects: private document content and keys must never be forwarded to another host.
     let client = reqwest::Client::builder()
@@ -178,8 +181,9 @@ pub async fn execute(
         })
     };
     tokio::select! {
-        result = operation => result,
+        biased;
         _ = cancel.cancelled() => Err(NetworkError::new("cancelled", "Request cancelled.", None)),
+        result = operation => result,
     }
 }
 fn classify_transport(error: reqwest::Error) -> NetworkError {
@@ -277,6 +281,72 @@ mod tests {
             timeout_ms: 1000,
             credential_ref: None,
         }
+    }
+    #[tokio::test]
+    async fn cancelled_and_redirected_requests_never_reach_the_next_host() {
+        use std::net::TcpListener;
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        target.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", target.local_addr().unwrap());
+        let token = CancellationToken::new();
+        token.cancel();
+        assert_eq!(
+            execute(&request(url.clone()), Some("private-key".into()), token)
+                .await
+                .unwrap_err()
+                .kind,
+            "cancelled"
+        );
+        assert_eq!(
+            target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let source = mock(
+            &format!("302 Found\r\nLocation: {url}/v1/models"),
+            "{}",
+            false,
+        )
+        .await;
+        let error = execute(
+            &request(source),
+            Some("private-key".into()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, Some(302));
+        assert!(!error.message.contains("private-key"));
+        assert_eq!(
+            target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    #[tokio::test]
+    async fn oversized_and_echoing_errors_are_bounded_and_private() {
+        let url = mock("200 OK", &"x".repeat(2_000_001), false).await;
+        assert_eq!(
+            execute(&request(url), None, CancellationToken::new())
+                .await
+                .unwrap_err()
+                .kind,
+            "malformed"
+        );
+        let url = mock(
+            "401 Unauthorized",
+            r#"{"error":{"message":"private-key private-prose"}}"#,
+            false,
+        )
+        .await;
+        let error = execute(
+            &request(url),
+            Some("private-key".into()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, "authentication");
+        assert!(!error.message.contains("private-key"));
+        assert!(!error.message.contains("private-prose"));
     }
     #[tokio::test]
     async fn failures_and_success() {

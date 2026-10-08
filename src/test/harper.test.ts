@@ -50,6 +50,42 @@ function editor(source: string) {
   return ed
 }
 describe('Harper common deterministic pipeline', () => {
+  it('bounds native workers to one and drops cancelled queued typing/manual work', async () => {
+    const input = evalSnapshot('She could of finished.')
+    let finish!: (value: unknown) => void
+    vi.mocked(invoke).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    vi.mocked(invoke).mockResolvedValue([finding(input.blocks[0].text)])
+    const run = (signal: AbortSignal) =>
+      runAnalyzer(
+        harper,
+        input,
+        'document',
+        defaultSettings().ai,
+        provider,
+        signal,
+        new AnalysisCache(),
+      )
+    const firstController = new AbortController(),
+      queuedController = new AbortController()
+    const first = run(firstController.signal)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
+    const queued = run(queuedController.signal).catch((error: unknown) => error)
+    const latest = run(new AbortController().signal)
+    queuedController.abort()
+    firstController.abort()
+    expect(await queued).toBeInstanceOf(Error)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    const abandoned = first.catch((error: unknown) => error)
+    finish([finding(input.blocks[0].text)])
+    expect(await abandoned).toBeInstanceOf(Error)
+    expect((await latest).findings).toHaveLength(1)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
   it('maps Unicode UTF-16 offsets and alternative suggestions without any AI request', async () => {
     const input = evalSnapshot('😀 She could of finished the report.')
     vi.mocked(invoke).mockResolvedValue([finding(input.blocks[0].text)])

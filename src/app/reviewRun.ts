@@ -145,12 +145,12 @@ export function createReviewRun(context: ReviewRunContext) {
       hits = 0,
       discarded = 0
     const errors: string[] = []
-    const activeReviewers = new Set<string>()
+    const activeReviewers = new Map<string, string>()
     const updateProgress = () => {
       if (controller.signal.aborted || running.current !== controller) return
       setStatus(
         jobs.limit === 1
-          ? `Reviewing with ${[...activeReviewers][0] ?? 'reviewers'}…`
+          ? `Reviewing with ${activeReviewers.values().next().value ?? 'reviewers'}…`
           : `Reviewing · ${activeReviewers.size} active reviewers · up to ${jobs.limit} parallel AI jobs…`,
       )
     }
@@ -160,7 +160,7 @@ export function createReviewRun(context: ReviewRunContext) {
         : jobs.limit
     await mapConcurrent(targets, reviewerSlots, async (analyzer) => {
       if (controller.signal.aborted) return
-      activeReviewers.add(analyzer.name)
+      activeReviewers.set(analyzer.id, analyzer.name)
       updateProgress()
       recordHistory(analyzer.id, { status: 'running' })
       try {
@@ -231,7 +231,7 @@ export function createReviewRun(context: ReviewRunContext) {
           errors.push(`${analyzer.name}: ${errorMessage(error)}`)
         }
       } finally {
-        activeReviewers.delete(analyzer.name)
+        activeReviewers.delete(analyzer.id)
         updateProgress()
       }
     })

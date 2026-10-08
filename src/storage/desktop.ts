@@ -41,9 +41,10 @@ export const storage = {
   confirm: (message: string) => confirm(message, { title: 'Draftbench', kind: 'warning' }),
   loadSettings: () => invoke<unknown>('load_settings'),
   saveSettings: (value: Settings) => invoke<void>('save_settings', { value }),
-  metadata: (name: 'project' | 'analysis') => invoke<unknown>('read_metadata', { name }),
-  setMetadata: (name: 'project' | 'analysis', value: unknown) =>
-    invoke<void>('write_metadata', { name, value }),
+  metadata: (name: 'project' | 'analysis', projectRoot?: string) =>
+    invoke<unknown>('read_metadata', { name, projectRoot }),
+  setMetadata: (name: 'project' | 'analysis', value: unknown, projectRoot?: string) =>
+    invoke<void>('write_metadata', { name, value, projectRoot }),
   setKey: (key: string, credentialRef?: string) =>
     invoke<void>('set_api_key', { key, credentialRef }),
   hasKey: (credentialRef?: string) => invoke<boolean>('has_api_key', { credentialRef }),

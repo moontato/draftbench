@@ -126,7 +126,6 @@ export function WorkspaceView({
     history,
     provider,
     running,
-    saveRef,
     persistRef,
     settingsRef,
     cache,
@@ -138,6 +137,7 @@ export function WorkspaceView({
     removeRecentProject,
     openProject,
     save,
+    saveBeforeLeave,
     onReady,
     onChange,
     enabled,
@@ -340,7 +340,7 @@ export function WorkspaceView({
                   </select>
                   <button
                     className="secondary-button save-button"
-                    disabled={saving || !dirty || !!session.source.unsupported.length}
+                    disabled={saving || fileBusy || !dirty || !!session.source.unsupported.length}
                     onClick={() => {
                       void save()
                     }}
@@ -354,6 +354,7 @@ export function WorkspaceView({
                     </summary>
                     <div>
                       <button
+                        disabled={saving || fileBusy}
                         onClick={() => {
                           void save(true)
                         }}
@@ -372,6 +373,7 @@ export function WorkspaceView({
                   Read-only: unsupported {session.source.unsupported.join(', ')}.{' '}
                   <button
                     className="text-button"
+                    disabled={saving || fileBusy}
                     onClick={() => {
                       void save(true)
                     }}
@@ -731,7 +733,7 @@ export function WorkspaceView({
                 onClick={() => {
                   const resolve = unsaved
                   setUnsaved(null)
-                  void saveRef.current().then(resolve)
+                  void saveBeforeLeave().then(resolve)
                 }}
               >
                 Save

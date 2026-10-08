@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Modal } from '../ui/Modal'
 import { CheckCircle2, ExternalLink, LoaderCircle, LockKeyhole, X } from 'lucide-react'
 import { AnalyzerManager } from './AnalyzerManager'
@@ -11,6 +11,7 @@ import {
   MAX_PARALLEL_JOBS,
   INPUT_BUDGET_LIMITS,
   inputBudgetsSchema,
+  settingsSchema,
   defaultSettings,
   backendConfig,
   type Settings,
@@ -49,14 +50,30 @@ export function SettingsDialog({
     [models, setModels] = useState<string[]>([]),
     [failed, setFailed] = useState(false),
     [saving, setSaving] = useState(false),
-    [changeKey, setChangeKey] = useState(false)
+    [changeKey, setChangeKey] = useState(false),
+    [keyBusy, setKeyBusy] = useState(false)
+  const operation = useRef(false)
+  const backendBusyChange = useCallback((busy: boolean, storingKey = false) => {
+    setTesting(busy)
+    setKeyBusy(storingKey)
+  }, [])
   useEffect(() => {
+    let active = true
+    connection.current?.abort()
+    setResult('')
+    setModels([])
+    setHasKey(false)
     void storage
       .hasKey(draft.backends.find((b) => b.id === draft.defaultBackend)?.credentialRef)
-      .then(setHasKey)
+      .then((available) => {
+        if (active) setHasKey(available)
+      })
       .catch(() => {})
     setKey('')
     setChangeKey(false)
+    return () => {
+      active = false
+    }
   }, [draft.defaultBackend])
   const currentAi =
     draft.defaultBackend === 'default'
@@ -66,6 +83,7 @@ export function SettingsDialog({
     setDraft((old) => updateBackend(old, old.defaultBackend, { [field]: value }))
   const storeKey = async (): Promise<string> => {
     if (!changeKey) return ''
+    setKeyBusy(true)
     let warning = ''
     try {
       await storage.setKey(
@@ -84,9 +102,12 @@ export function SettingsDialog({
     ai('credentialGeneration', currentAi.credentialGeneration + 1)
     setChangeKey(false)
     setKey('')
+    setKeyBusy(false)
     return warning
   }
   const test = async () => {
+    if (operation.current) return
+    operation.current = true
     setTesting(true)
     setResult('')
     setFailed(false)
@@ -106,17 +127,32 @@ export function SettingsDialog({
       setFailed(true)
       setResult(errorMessage(error) + (warning ? ` ${warning}` : ''))
     } finally {
+      operation.current = false
       setTesting(false)
     }
   }
   const save = async () => {
+    if (operation.current) return
     if (!inputBudgetsSchema.safeParse(draft.analysis).success) {
       setFailed(true)
       setResult('Input budgets must be whole numbers between 1,000 and 1,000,000 characters.')
       return
     }
+    const validated = settingsSchema.safeParse(draft)
+    if (!validated.success) {
+      setFailed(true)
+      setResult(
+        validated.error.issues
+          .slice(0, 3)
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join(' '),
+      )
+      return
+    }
+    operation.current = true
     setSaving(true)
     const warning = await storeKey()
+    if (warning) onWarning(warning)
     try {
       await onSave(
         updateBackend(draft, draft.defaultBackend, {
@@ -127,15 +163,16 @@ export function SettingsDialog({
       onClose()
     } catch (error) {
       setFailed(true)
-      setResult(errorMessage(error))
+      setResult(errorMessage(error) + (warning ? ` ${warning}` : ''))
     } finally {
+      operation.current = false
       setSaving(false)
     }
   }
   return (
     <Modal
       onEscape={() => {
-        if (!saving) {
+        if (!saving && !keyBusy) {
           connection.current?.abort()
           onClose()
         }
@@ -150,7 +187,7 @@ export function SettingsDialog({
           <button
             className="icon-button"
             aria-label="Close settings"
-            disabled={saving}
+            disabled={saving || keyBusy}
             onClick={() => {
               connection.current?.abort()
               onClose()
@@ -166,6 +203,7 @@ export function SettingsDialog({
                 <button
                   key={name}
                   className={tab === name ? 'active' : ''}
+                  disabled={testing || saving}
                   onClick={() => setTab(name)}
                 >
                   {name}
@@ -183,7 +221,7 @@ export function SettingsDialog({
               </p>
             </div>
           </nav>
-          <div className="settings-content">
+          <fieldset className="settings-content" disabled={testing || saving}>
             {tab === 'AI' && (
               <>
                 <span className="eyebrow">YOUR INFERENCE SERVER</span>
@@ -422,7 +460,7 @@ export function SettingsDialog({
                 provider={provider}
                 onCredentialChange={onCredentialChange}
                 onWarning={onWarning}
-                onBusyChange={setTesting}
+                onBusyChange={backendBusyChange}
               />
             )}
             {tab === 'Editor' && (
@@ -516,12 +554,12 @@ export function SettingsDialog({
                 {result}
               </div>
             )}
-          </div>
+          </fieldset>
         </div>
         <footer>
           <button
             className="secondary-button"
-            disabled={saving}
+            disabled={saving || keyBusy}
             onClick={() => {
               connection.current?.abort()
               onClose()

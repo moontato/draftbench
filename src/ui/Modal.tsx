@@ -8,12 +8,14 @@ export function Modal({ children, onEscape }: { children: ReactNode; onEscape?: 
     const focusable = () =>
       [
         ...(root.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]',
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]',
         ) ?? []),
       ].filter((el) => el.getClientRects().length)
     const current = document.activeElement
     if (!root.current?.contains(current)) focusable()[0]?.focus()
     const handler = (event: KeyboardEvent) => {
+      const modals = document.querySelectorAll('.modal-backdrop')
+      if (modals.item(modals.length - 1) !== root.current) return
       if (event.key === 'Escape' && escape.current) {
         event.preventDefault()
         escape.current()

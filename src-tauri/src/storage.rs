@@ -6,6 +6,13 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+pub fn check_project_root(active: &Path, expected: Option<&str>) -> Result<(), String> {
+    if expected.is_some_and(|expected| Path::new(expected) != active) {
+        return Err("Project changed; metadata was not read or written.".into());
+    }
+    Ok(())
+}
+
 pub fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
@@ -128,6 +135,14 @@ pub fn tree(root: &Path, dir: &Path, depth: usize) -> Result<Vec<FileEntry>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_requires_the_expected_project_root() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        assert!(check_project_root(first.path(), Some(first.path().to_str().unwrap())).is_ok());
+        assert!(check_project_root(second.path(), Some(first.path().to_str().unwrap())).is_err());
+        assert!(check_project_root(first.path(), None).is_ok());
+    }
     #[test]
     fn markdown_round_trip_and_conflict() {
         let dir = tempfile::tempdir().unwrap();

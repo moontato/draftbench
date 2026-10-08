@@ -1,5 +1,7 @@
 # v0.2 verification and acceptance checklist
 
+**Archived v0.2.0 record. Current v0.2.1 audit, fixes and verification:** [stabilization-v021.md](stabilization-v021.md).
+
 Recorded **2026-10-07** in Debian 12 x86-64. This is an in-place upgrade of v0.1.5, not a replacement application or certification of every OS/server.
 
 ## Baseline and current checks
