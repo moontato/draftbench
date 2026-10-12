@@ -53,6 +53,8 @@ export interface Diagnostic {
   dependencies: Record<string, string>
   engine: EngineMetadata
   configurationHash: string
+  /** The quote is intact, but reviewed edits changed the original analysis context. */
+  contextChanged?: boolean
 }
 export interface Issue {
   block_id: string

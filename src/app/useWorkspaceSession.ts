@@ -1,5 +1,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { Editor } from '@tiptap/core'
+import type { Transaction } from '@tiptap/pm/state'
+import { ReviewEditHistory } from '../editor/reviewEdits'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { OpenAICompatibleProvider } from '../ai/providers/openai'
 import { AnalysisCache } from '../analyzers/cache'
@@ -439,7 +441,9 @@ export function useWorkspaceSession() {
     document.addEventListener('keydown', shortcut)
     return () => document.removeEventListener('keydown', shortcut)
   }, [])
+  const reviewEditHistory = useRef(new ReviewEditHistory())
   const onReady = (editor: Editor) => {
+    reviewEditHistory.current = new ReviewEditHistory()
     editorRef.current = editor
     const active = sessionRef.current
     if (!active) return
@@ -447,9 +451,10 @@ export function useWorkspaceSession() {
     setCurrent(snap)
     currentRef.current = snap
   }
-  const onChange = (editor: Editor) => {
+  const onChange = (editor: Editor, transaction: Transaction) => {
     const active = sessionRef.current
     if (!active) return
+    const before = currentRef.current
     revision.current++
     const snap = snapshot(editor, active.id, revision.current)
     setCurrent(snap)
@@ -458,12 +463,7 @@ export function useWorkspaceSession() {
     setStatus((old) =>
       old.startsWith('Saved review') ? 'Document changed since the saved review.' : old,
     )
-    setFindings((old) =>
-      old.flatMap((f) => {
-        const next = refreshDiagnostic(f, snap)
-        return next ? [next] : []
-      }),
-    )
+    setFindings((old) => reviewEditHistory.current.update(old, before, snap, transaction))
   }
   useEffect(() => {
     const active = sessionRef.current,

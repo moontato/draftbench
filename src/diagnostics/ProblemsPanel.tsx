@@ -212,6 +212,9 @@ export function ProblemsPanel(props: Props) {
                     {f.severity}
                     {f.engine.kind === 'ai' && <span className="ai-tag">AI</span>}
                   </span>
+                  {f.contextChanged && (
+                    <span className="finding-link">Context changed · review carefully</span>
+                  )}
                   <span className="finding-message">{f.message}</span>
                   <span className="finding-quote">
                     “{f.quote.length > 100 ? f.quote.slice(0, 100) + '…' : f.quote}”
@@ -257,6 +260,13 @@ export function ProblemsPanel(props: Props) {
               </button>
             </div>
             <div className="inspector-body" id={reviewId} hidden={collapsed}>
+              {chosen.contextChanged && (
+                <p role="note">
+                  Another suggestion changed the analysis context. The quoted text is unchanged, but
+                  check that this suggestion still makes sense before applying it. Rerun analysis
+                  for a fresh review.
+                </p>
+              )}
               <p>{chosen.explanation}</p>
               {chosen.replacements && chosen.replacements.length > 1 && (
                 <label className="field">

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
+import type { Transaction } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import {
@@ -23,7 +24,7 @@ interface Props {
   readOnly: boolean
   settings: Settings['editor']
   onReady: (editor: Editor) => void
-  onChange: (editor: Editor) => void
+  onChange: (editor: Editor, transaction: Transaction) => void
   onFinding: (id: string) => void
   askLink: () => Promise<string | null>
 }
@@ -66,7 +67,8 @@ export function WritingEditor({
         callbacks.current.onReady(editor)
       },
       onUpdate: ({ editor, transaction }) => {
-        if (initialized.current && transaction.docChanged) callbacks.current.onChange(editor)
+        if (initialized.current && transaction.docChanged)
+          callbacks.current.onChange(editor, transaction)
       },
     },
     [],

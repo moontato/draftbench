@@ -6,6 +6,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { refreshDiagnostic } from '../diagnostics/mapping'
 import { snapshot } from './blocks'
 import type { Diagnostic } from '../diagnostics/types'
+export const appliedSuggestionMeta = 'draftbench.appliedSuggestion'
 const key = new PluginKey<DecorationSet>('writingDiagnostics')
 export const DiagnosticDecorations = Extension.create<{ onSelect: (id: string) => void }>({
   name: 'writingDiagnostics',
@@ -94,7 +95,7 @@ export function applyFix(
         : editor.schema.text(replacement, marks),
     )
   } else tr.delete(fresh.from, fresh.to)
-  editor.view.dispatch(closeHistory(tr).scrollIntoView())
+  editor.view.dispatch(closeHistory(tr).setMeta(appliedSuggestionMeta, finding.id).scrollIntoView())
   editor.view.dispatch(closeHistory(editor.state.tr).setMeta('addToHistory', false))
   editor.commands.focus()
   return true

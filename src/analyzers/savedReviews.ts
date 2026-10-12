@@ -108,6 +108,7 @@ export class SavedReviews {
       const fresh = refreshDiagnostic(finding, input)
       if (
         !fresh ||
+        finding.contextChanged ||
         finding.analyzerVersion !== source.version ||
         finding.configurationHash !== source.configurationHash
       )
