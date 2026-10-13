@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import packageMetadata from '../../package.json' with { type: 'json' }
 const appVersion = packageMetadata.version
 
@@ -312,6 +312,25 @@ async function installDesktopFixture(
   }, seed)
 }
 
+async function runReviewers(
+  page: Page,
+  names: string[] | undefined,
+  scope: 'document' | 'selection' | 'block' = 'document',
+  force = false,
+) {
+  const menu = page.locator('.reviewer-run-menu')
+  await menu.locator('summary').click()
+  await menu.getByLabel('Review scope').selectOption(scope)
+  await menu.getByRole('button', { name: 'Clear', exact: true }).click()
+  if (names) {
+    for (const name of names) await menu.getByRole('checkbox', { name, exact: true }).check()
+  } else await menu.getByRole('button', { name: 'Select all', exact: true }).click()
+  await menu
+    .getByRole('checkbox', { name: 'Force rerun (bypass cache)', exact: true })
+    .setChecked(force)
+  await menu.getByRole('button', { name: /^Run selected \(\d+\)$/ }).click()
+}
+
 test('desktop shell: write, analyze, inspect, apply, undo, save and model override', async ({
   page,
 }) => {
@@ -333,8 +352,7 @@ test('desktop shell: write, analyze, inspect, apply, undo, save and model overri
         ).length,
     ),
   ).toBe(0)
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
   await expect(
     page.getByText('Name the proposal instead of using an unclear reference.'),
@@ -366,8 +384,7 @@ test('desktop shell: write, analyze, inspect, apply, undo, save and model overri
     .getByRole('textbox')
     .fill('reviewer-14b')
   await page.getByRole('button', { name: 'Save settings' }).click()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.getByText(/findings ·/)).toBeVisible()
   const usedOverride = await page.evaluate(() =>
     (
@@ -398,8 +415,7 @@ test('Problems filters, grouping, and focus mode retain the draft', async ({ pag
   await page.goto('/')
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toBeVisible()
   await page.getByLabel('Filter by severity').selectOption('info')
   await expect(page.locator('.finding-card')).toHaveCount(0)
@@ -524,8 +540,7 @@ test('reopening restores an exact saved review without inference; edits/config c
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
   await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toBeVisible()
   await expect
     .poll(() =>
@@ -620,8 +635,7 @@ test('history shows manual/cache runs, follows renames, isolates copies, and nev
   await page.keyboard.press('Escape')
   await expect(historyButton).toBeFocused()
   const review = async () => {
-    await page.locator('.run-controls summary').click()
-    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await runReviewers(page, ['Clarity'])
     await expect(page.locator('.analysis-status')).toContainText('1 findings')
     await expect(page.getByRole('button', { name: 'Analyze document', exact: true })).toBeVisible()
   }
@@ -682,8 +696,7 @@ test('history records failed and cancelled runs, including cancellation on docum
   await page.evaluate(() => {
     ;(window as unknown as { fixture: { failReviews: boolean } }).fixture.failReviews = true
   })
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
   await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
   await expect(page.locator('.history-reviewers')).toContainText('Failed')
@@ -695,13 +708,11 @@ test('history records failed and cancelled runs, including cancellation on docum
     fixture.failReviews = false
     fixture.pauseReviews = true
   })
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.locator('.analysis-status')).toContainText('Reviewing with Clarity')
   await page.getByRole('button', { name: 'Cancel analysis', exact: true }).click()
   await expect(page.locator('.analysis-status')).toContainText('Analysis cancelled')
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.locator('.analysis-status')).toContainText('Reviewing with Clarity')
   await page.getByRole('button', { name: 'essay', exact: true }).click()
   await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
@@ -719,8 +730,7 @@ test('legacy saved findings recover a labeled history entry even without a valid
   await page.goto('/')
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect(page.locator('.analysis-status')).toContainText('1 findings')
   await expect
     .poll(() =>
@@ -799,8 +809,7 @@ test('review inspector resizes by drag/keyboard and collapses without losing the
   await page.goto('/')
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   const finding = page.getByRole('button', { name: /Unclear referent hides the point/ })
   await finding.click()
   const inspector = page.getByRole('region', { name: 'Review finding', exact: true })
@@ -1111,8 +1120,7 @@ test('parallel jobs persist, bound full-review requests, reuse cache, and preser
       .fixture.reviewConcurrency
     stats.peak = 0
   })
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Force rerun all', exact: true }).click()
+  await runReviewers(page, undefined, 'document', true)
   await expect(page.locator('.analysis-status')).toContainText('findings ·')
   expect(
     await page.evaluate(
@@ -1293,8 +1301,7 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
   await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Redundancy', exact: true }).click()
+  await runReviewers(page, ['Redundancy'])
   await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
   await expect(page.locator('.notice')).toContainText('48,000-character document input budget')
   await expect(page.locator('.notice')).toContainText('Settings → Analysis')
@@ -1345,8 +1352,7 @@ test('input budgets validate, persist across restart, allow long essays, and gat
     0,
   )
   await expect(page.getByText('“The” appears twice in a row.')).toBeVisible()
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Redundancy', exact: true }).click()
+  await runReviewers(page, ['Redundancy'])
   await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
   await expect(page.locator('.notice')).toContainText('1,000-character document input budget')
   await page.getByRole('button', { name: 'Open settings' }).click()
@@ -1402,6 +1408,79 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   await reopened.close()
 })
 
+test('reviewer checkboxes run only a chosen batch, reuse cache, and keep session choices across documents', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    files: {
+      'essay.md':
+        '# A better report\n\nThe the plan has merit.\n\nThis is unclear.\n\nA separate paragraph gives the reader context.\n',
+      'notes.md': 'Some separate notes.\n',
+    },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const menu = page.locator('.reviewer-run-menu')
+  const requests = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'ai_http',
+        ).length,
+    )
+  await menu.locator('summary').click()
+  await menu.getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect(menu.getByRole('button', { name: 'Run selected (0)', exact: true })).toBeDisabled()
+  await menu.getByRole('checkbox', { name: 'Clarity', exact: true }).check()
+  await menu.getByRole('checkbox', { name: 'Development', exact: true }).check()
+  await expect(menu.getByRole('button', { name: 'Run selected (2)', exact: true })).toBeVisible()
+  expect(await requests()).toBe(0)
+  await menu.getByRole('button', { name: 'Run selected (2)', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('2 findings')
+  await expect.poll(requests).toBe(5) // Four nearby Clarity units, one Development unit.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              fixture: {
+                metadata: { analysis: { history: { runs: { reviewers: { id: string }[] }[] } } }
+              }
+            }
+          ).fixture.metadata.analysis?.history?.runs[0]?.reviewers.map((r) => r.id) ?? [],
+      ),
+    )
+    .toEqual(['clarity', 'development'])
+  await menu.locator('summary').click()
+  await expect(menu.getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked()
+  await expect(menu.getByRole('checkbox', { name: 'Development', exact: true })).toBeChecked()
+  await expect(menu.getByRole('checkbox', { name: 'Structure', exact: true })).not.toBeChecked()
+  await menu.getByRole('button', { name: 'Run selected (2)', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('5 cached reviews')
+  expect(await requests()).toBe(5)
+  await menu.locator('summary').click()
+  await menu.getByRole('checkbox', { name: 'Force rerun (bypass cache)', exact: true }).check()
+  expect(await requests()).toBe(5)
+  await menu.getByRole('button', { name: 'Run selected (2)', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('2 findings')
+  await expect.poll(requests).toBe(10)
+  await expect(page.getByRole('button', { name: 'Analyze document', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'notes', exact: true }).click()
+  await menu.locator('summary').click()
+  await expect(menu.getByRole('checkbox', { name: 'Clarity', exact: true })).toBeChecked()
+  await expect(menu.getByRole('checkbox', { name: 'Development', exact: true })).toBeChecked()
+  await menu.getByLabel('Review scope').selectOption('block')
+  await expect(menu.getByRole('checkbox', { name: 'Development', exact: true })).toBeDisabled()
+  await expect(menu.getByRole('button', { name: 'Run selected (1)', exact: true })).toBeVisible()
+  await menu.getByRole('button', { name: 'Clear', exact: true }).click()
+  await expect(menu.getByRole('button', { name: 'Run selected (0)', exact: true })).toBeDisabled()
+  expect(await requests()).toBe(10)
+  await page.keyboard.press('Escape')
+  await expect(menu.locator('summary')).toBeFocused()
+})
+
 for (const action of ['guide', 'question'] as const) {
   test(`${action} feedback has no Apply action and survives cache reuse and saved-review restoration`, async ({
     page,
@@ -1411,8 +1490,7 @@ for (const action of ['guide', 'question'] as const) {
     await page.goto('/')
     await page.getByRole('button', { name: 'Open a writing folder' }).click()
     await page.getByRole('button', { name: 'essay', exact: true }).click()
-    await page.locator('.run-controls summary').click()
-    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await runReviewers(page, ['Clarity'])
     await expect(page.locator('.analysis-status')).toContainText('findings ·')
     await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
     const label = action === 'question' ? 'A QUESTION FOR YOU' : 'REVISION GUIDANCE'
@@ -1429,8 +1507,7 @@ for (const action of ['guide', 'question'] as const) {
           (c) => c.command === 'ai_http',
         ).length,
     )
-    await page.locator('.run-controls summary').click()
-    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await runReviewers(page, ['Clarity'])
     await expect(page.locator('.analysis-status')).toContainText('cached reviews')
     expect(
       await page.evaluate(
@@ -1903,8 +1980,7 @@ test('stabilization: deleting the active document cancels inference rather than 
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
   await page.getByRole('button', { name: 'essay', exact: true }).click()
   await patchFixture(page, { pauseReviews: true })
-  await page.locator('.run-controls summary').click()
-  await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
   await expect
     .poll(async () =>
       page.evaluate(

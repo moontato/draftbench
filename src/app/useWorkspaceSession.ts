@@ -4,6 +4,7 @@ import type { Transaction } from '@tiptap/pm/state'
 import { ReviewEditHistory } from '../editor/reviewEdits'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { OpenAICompatibleProvider } from '../ai/providers/openai'
+import type { AIProvider } from '../ai/types'
 import { AnalysisCache } from '../analyzers/cache'
 import { AnalysisHistory } from '../analyzers/history'
 import { createAnalyzerRegistry } from '../analyzers/registry'
@@ -77,7 +78,7 @@ export function useWorkspaceSession() {
     savedReviews = useRef(new SavedReviews(analyzers)),
     history = useRef(new AnalysisHistory()),
     pendingRestore = useRef<string | null>(null),
-    provider = useRef(new OpenAICompatibleProvider()),
+    provider = useRef<AIProvider>(new OpenAICompatibleProvider()),
     running = useRef<AbortController | null>(null)
   const closePending = useRef(false)
   const leavePending = useRef<Promise<boolean> | null>(null)

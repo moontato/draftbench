@@ -1011,6 +1011,99 @@ summary:hover .tree-action {
 .action-menu button:hover {
   background: #eef3e7;
 }
+.reviewer-run-menu > div {
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 110px);
+  overflow-y: auto;
+  padding: 12px;
+}
+.reviewer-run-scope {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+}
+.reviewer-run-scope select {
+  width: 100%;
+  padding: 7px 9px;
+}
+.reviewer-run-shortcuts {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.reviewer-run-shortcuts button {
+  width: auto;
+  padding: 6px 9px;
+}
+.reviewer-run-list {
+  border: 0;
+  margin: 8px 0;
+  padding: 0;
+  min-width: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.reviewer-run-list legend {
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+.reviewer-run-choice,
+.reviewer-run-force {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 5px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.reviewer-run-choice:hover {
+  background: #eef3e7;
+}
+.reviewer-run-choice:has(input:disabled) {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.reviewer-run-choice input,
+.reviewer-run-force input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.reviewer-run-choice > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.reviewer-run-choice small {
+  margin-left: auto;
+  font-size: 9px;
+  text-align: right;
+}
+.reviewer-run-force {
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding-top: 10px;
+}
+.reviewer-run-menu .reviewer-run-submit {
+  text-align: center;
+  margin-top: 6px;
+  background: var(--accent);
+  color: white;
+}
+.reviewer-run-menu .reviewer-run-submit:hover:not(:disabled) {
+  background: #365a43;
+}
+.reviewer-run-note {
+  font-size: 10px;
+  line-height: 1.5;
+  margin-top: 8px;
+  color: var(--muted);
+}
 .notice {
   position: fixed;
   bottom: 66px;

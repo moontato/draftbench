@@ -74,7 +74,11 @@ export function createReviewRun(context: ReviewRunContext) {
     dirtyRef,
     persistAnalysis,
   } = context
-  return async (scope: Scope = 'document', analyzerId?: string, force = false) => {
+  return async (
+    scope: Scope = 'document',
+    analyzerIds?: string | readonly string[],
+    force = false,
+  ) => {
     const editor = editorRef.current,
       active = sessionRef.current
     if (!editor || !active || busy || running.current || !settingsLoaded) return
@@ -84,12 +88,18 @@ export function createReviewRun(context: ReviewRunContext) {
       showNotice('Select the passage you want to analyze first.', true)
       return
     }
+    // Undefined keeps the all-enabled shortcut. An explicitly empty selection
+    // must never fall back to all reviewers; a Set also deduplicates requested IDs.
+    const requested =
+      analyzerIds === undefined
+        ? undefined
+        : new Set(typeof analyzerIds === 'string' ? [analyzerIds] : analyzerIds)
     const targets = analyzers.filter(
       (a) =>
-        (!analyzerId || a.id === analyzerId) &&
+        (!requested || requested.has(a.id)) &&
         (enabled(a.id) ||
           (a.origin === 'custom' &&
-            analyzerId === a.id &&
+            requested?.has(a.id) &&
             (settingsRef.current.analyzers[a.id]?.enabled ?? true) &&
             (settingsRef.current.customAnalyzers.find((entry) => entry.id === a.id)?.enabled ??
               false))) &&
@@ -97,7 +107,9 @@ export function createReviewRun(context: ReviewRunContext) {
     )
     if (!targets.length) {
       showNotice(
-        'No enabled analyzers support this scope. Check the profile and Analysis settings.',
+        requested
+          ? 'No selected reviewers are enabled for this scope. Check the selection, profile, and Analysis settings.'
+          : 'No enabled analyzers support this scope. Check the profile and Analysis settings.',
         true,
       )
       return

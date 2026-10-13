@@ -4,7 +4,9 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.3 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.4 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+
+v0.2.4 adds per-run reviewer multi-selection: choose a checkbox-selected batch, scope, and optional cache bypass without changing your profiles. Choices persist during the session, and findings from unselected reviewers stay intact.
 
 v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development review, and genre-aware review continuity while preserving the v0.2.2 Apply/Undo/Redo lifecycle. It retains the v0.2.1 document, settings, and credential safety improvements; see [stabilization findings and verification](docs/stabilization-v021.md).
 
@@ -18,7 +20,7 @@ v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development re
 - A small History button at the top of the Analysis pane shows the document's previous manual runs, reviewer/model provenance, scope, finding counts, cache reuse, and outcomes.
 - Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
 - **Clarity**, **Ambiguous reference**, **Redundancy**, **Structure**, and **Development** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
-- Analyze document (all enabled reviewers), selection, current paragraph, or one analyzer. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
+- Analyze document (all enabled reviewers), or choose a checkbox-selected batch from **Run reviewers** at document, selection, or current-paragraph scope. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
 - Configuration-driven custom AI reviewers: editable instructions, stable IDs, scope, severity and enablement, using the same exact-quote diagnostics and reviewed fixes as built-ins.
 - Named OpenAI-compatible backends with independent credentials/options, default backend/model inheritance, per-analyzer overrides, connection tests, and shared global/per-server concurrency limits.
 - Embedded offline **Harper** English grammar/style review; no API key, network, runtime management or downloads. Optional and disabled globally by default, including upgrades.
@@ -105,7 +107,7 @@ The plist should name an icon resource that exists in `Contents/Resources`. If i
 2. Create/open a document. `examples/nonfiction/` is a small sample project; its essay intentionally contains a repeated word and passages to review.
 3. Write normally using the prose toolbar. Save with **Ctrl+S / Cmd+S**.
 4. Configure your AI server in **Settings → AI**, or use the offline repeated-word check without AI.
-5. Choose **Analyze document**, **Analyze selection**, or a specific reviewer from **Run analyzer**. Current-paragraph analysis is also in that menu. Document-only reviewers are skipped for selection/paragraph runs; run them explicitly on the document instead.
+5. Choose **Analyze document** or **Analyze selection** to run all enabled reviewers. For a hand-picked batch, open **Run reviewers**, choose the scope, check the reviewers you want, then click **Run selected (N)**. **Select all / Clear** make it easy to choose a group or just one reviewer. **Force rerun (bypass cache)** applies only to that selected batch. Document-only reviewers are unavailable for selection/paragraph runs. Global disable switches apply to every reviewer; built-ins also respect profile membership. Checkbox choices are remembered during the app session, including across documents, and do not change your profiles or start analysis automatically.
 6. Click an underline or finding to inspect its passage and explanation. New AI findings carry exactly one resolution: a safe single-block replacement shown as a diff, concise revision guidance, or a focused question for the author. Older restored reviews may have only an explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
 
 On startup, **Recent projects** shows up to five previously opened folders, most recent first, with names and paths. Click one to reopen the project directly; no folder picker or automatic opening is involved. Only successful folder opens update the list, and canonical paths avoid duplicate aliases. Missing/offline/inaccessible folders are checked only when clicked, report an error, and remain removable using the entry's × button. Removing a recent entry never deletes the folder or its documents. Your current project/editor remain intact if an attempted recent folder cannot be opened. The list starts filling as folders are opened in this version.
@@ -118,7 +120,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.3**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.4**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -241,7 +243,7 @@ In **Settings → Analyzers**, create a reviewer with a unique lowercase ID, nam
 
 Example task: “For professional emails, flag requests whose action or deadline is genuinely unclear. Return no findings for a direct, unambiguous request.” This is configuration, **not executable plugin code**. Draftbench supplies the diagnostic schema, exact-quote requirements and reviewer-not-author policy. Custom findings use ordinary inline underlines, filtering/grouping, provenance, dismissal, reviewed Apply and Undo/Redo. Structural/cross-block suggestions remain report-only.
 
-Run a custom reviewer individually from **Run analyzer**, or add it to a custom profile. Selection-only reviewers require a selection and never silently review the whole document. Paragraph/document input budgets and scope guards apply just as they do to built-ins.
+Select a custom reviewer in **Run reviewers**, individually or alongside other reviewers, or add it to a custom profile. Globally enabled custom reviewers can be explicitly selected outside preset membership. Selection-only reviewers require **Selected text** scope and a selection; they never silently review the whole document. Paragraph/document input budgets and scope guards apply just as they do to built-ins.
 
 ### Named backends and routing
 
@@ -337,7 +339,7 @@ On an explicit later run, request-cache hits still require identical structured 
 
 AI results request JSON-schema output, fall back narrowly to JSON-object/plain JSON instructions for unsupported API features, validate the envelope and each issue, and reject unknown blocks, nonunique quotes, or out-of-scope passages. One reviewer failure does not crash the others. No silent rewrite or arbitrary-prose extraction is used.
 
-The cache includes analyzer/prompt version, effective endpoint/model/options, credential generation, scope, target content/type hashes, and relevant context hashes. Empty successful reviews are cached; failures/partially malformed results are not. Paragraph-independent entries survive unrelated edits. Cache size is bounded (300 entries / approximately 2 MB). **Force rerun all** bypasses hits. A model changed behind the same server/model ID is not detectable; force a rerun.
+The cache includes analyzer/prompt version, effective endpoint/model/options, credential generation, scope, target content/type hashes, and relevant context hashes. Empty successful reviews are cached; failures/partially malformed results are not. Paragraph-independent entries survive unrelated edits. Cache size is bounded (300 entries / approximately 2 MB). **Force rerun (bypass cache)** in **Run reviewers** bypasses hits only for the selected batch. Use **Select all** to force every available reviewer for the chosen scope. A model changed behind the same server/model ID is not detectable; force a rerun.
 
 ## Implement another analyzer
 

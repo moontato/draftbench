@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   BookOpen,
-  ChevronDown,
   ChevronRight,
   Circle,
   FilePlus2,
@@ -31,6 +30,7 @@ import { desktopAvailable, storage, type FileEntry } from '../storage/desktop'
 import { Modal } from '../ui/Modal'
 import { useWorkspaceSession } from './useWorkspaceSession'
 import { backendConfig } from '../settings/model'
+import { ReviewerRunMenu } from './ReviewerRunMenu'
 function FileTree({
   entries,
   selected,
@@ -521,55 +521,35 @@ export function WorkspaceView({
         </div>
         <div className="run-controls">
           {session && (
-            <>
-              <button
-                className="text-button"
-                disabled={busy}
-                onClick={() => task(() => run('selection'))}
-              >
-                Analyze selection
-              </button>
-              <details className="action-menu upward">
-                <summary>
-                  <span>Run analyzer</span>
-                  <ChevronDown size={13} />
-                </summary>
-                <div>
-                  <button disabled={busy} onClick={() => task(() => run('block'))}>
-                    Analyze current paragraph
-                  </button>
-                  {analyzers.map((a) => (
-                    <button
-                      key={a.id}
-                      disabled={
-                        busy || !(a.origin === 'custom' ? globallyEnabled(a.id) : enabled(a.id))
-                      }
-                      onClick={() =>
-                        task(() =>
-                          run(a.scopes.includes('document') ? 'document' : 'selection', a.id),
-                        )
-                      }
-                    >
-                      {a.name}
-                    </button>
-                  ))}
-                  <button
-                    disabled={busy}
-                    onClick={() => task(() => run('document', undefined, true))}
-                  >
-                    Force rerun all
-                  </button>
-                </div>
-              </details>
-              <button
-                className="primary-button"
-                disabled={!!session.source.unsupported.length}
-                onClick={() => (busy ? running.current?.abort() : task(() => run()))}
-              >
-                {busy ? <X size={14} /> : <Sparkles size={14} />}{' '}
-                {busy ? 'Cancel analysis' : 'Analyze document'}
-              </button>
-            </>
+            <button
+              className="text-button"
+              disabled={busy}
+              title="Run all enabled reviewers that support selected text"
+              onClick={() => task(() => run('selection'))}
+            >
+              Analyze selection
+            </button>
+          )}
+          <ReviewerRunMenu
+            analyzers={analyzers}
+            enabled={enabled}
+            globallyEnabled={globallyEnabled}
+            hasDocument={!!session}
+            busy={busy || fileBusy || saving}
+            onRun={(scope, ids, force) => task(() => run(scope, ids, force))}
+          />
+          {session && (
+            <button
+              className="primary-button"
+              disabled={!!session.source.unsupported.length}
+              title={
+                busy ? 'Cancel the current analysis' : 'Run all enabled reviewers for the document'
+              }
+              onClick={() => (busy ? running.current?.abort() : task(() => run()))}
+            >
+              {busy ? <X size={14} /> : <Sparkles size={14} />}{' '}
+              {busy ? 'Cancel analysis' : 'Analyze document'}
+            </button>
           )}
         </div>
       </footer>
