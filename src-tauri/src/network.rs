@@ -3,6 +3,9 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+mod stream;
+use stream::{CompletionStream, MAX_RESPONSE_BYTES};
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkError {
@@ -123,9 +126,32 @@ pub async fn execute(
     let operation = async {
         let mut response = builder.send().await.map_err(classify_transport)?;
         let status = response.status().as_u16();
+        let is_stream = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case("text/event-stream")
+            });
+        if (200..300).contains(&status) && request.route == "chat/completions" && is_stream {
+            let mut stream = CompletionStream::new(status);
+            while let Some(chunk) = response.chunk().await.map_err(classify_transport)? {
+                if stream.feed(&chunk)? {
+                    break;
+                }
+            }
+            return stream.finish();
+        }
+        // Keep support for endpoints that ignore stream=true and return ordinary
+        // JSON, and classify non-2xx JSON errors before structured-format fallback.
         let mut bytes = vec![];
         while let Some(chunk) = response.chunk().await.map_err(classify_transport)? {
-            if bytes.len() + chunk.len() > 2_000_000 {
+            if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
                 return Err(NetworkError::new(
                     "malformed",
                     "Server response exceeds the size limit.",
@@ -254,13 +280,16 @@ mod tests {
         assert!(endpoint("file:///etc/passwd", "models").is_err());
     }
     async fn mock(status: &str, body: &str, delay: bool) -> String {
+        mock_with_type(status, body, delay, "application/json").await
+    }
+    async fn mock_with_type(status: &str, body: &str, delay: bool, content_type: &str) -> String {
         use std::{
             io::{Read, Write},
             net::TcpListener,
         };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        let response = format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let mut buf = [0; 8192];
@@ -281,6 +310,115 @@ mod tests {
             timeout_ms: 1000,
             credential_ref: None,
         }
+    }
+    #[tokio::test]
+    async fn streamed_and_ordinary_json_completions_return_the_same_final_answer() {
+        for (content_type, body) in [
+            ("text/event-stream; charset=utf-8", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"issues\\\":[]}\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),
+            ("application/json", r#"{"choices":[{"message":{"content":"{\"issues\":[]}"},"finish_reason":"stop"}]}"#),
+        ] {
+            let url = mock_with_type("200 OK", body, false, content_type).await;
+            let mut req = request(url);
+            req.route = "chat/completions".into();
+            req.body = Some(serde_json::json!({"model": "test", "stream": true}));
+            let value = execute(&req, None, CancellationToken::new()).await.unwrap();
+            assert_eq!(value["choices"][0]["message"]["content"], r#"{"issues":[]}"#);
+            assert_eq!(value["choices"][0]["finish_reason"], "stop");
+        }
+    }
+    // Check the server's socket, not just the client's cancelled result. A dropped
+    // response future can otherwise leave the HTTP driver's connection alive.
+    async fn assert_active_request_disconnects(streaming: bool) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0; 4096];
+            let header_end = loop {
+                let count = socket.read(&mut buf).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buf[..count]);
+                if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]).to_lowercase();
+            let length: usize = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            while bytes.len() < header_end + length {
+                let count = socket.read(&mut buf).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buf[..count]);
+            }
+            if streaming {
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+                let event = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n";
+                socket
+                    .write_all(format!("{:x}\r\n{}\r\n", event.len(), event).as_bytes())
+                    .unwrap();
+            }
+            started_tx.send(()).unwrap();
+            let disconnected = match socket.read(&mut buf) {
+                Ok(0) => true,
+                Err(e) => matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                ),
+                _ => false,
+            };
+            let _ = closed_tx.send(disconnected);
+        });
+        let mut req = request(url);
+        req.route = "chat/completions".into();
+        req.body = Some(serde_json::json!({ "model": "test", "stream": streaming }));
+        req.timeout_ms = 10_000;
+        let token = CancellationToken::new();
+        let signal = token.clone();
+        let pending = tokio::spawn(async move { execute(&req, None, signal).await });
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        token.cancel();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .kind,
+            "cancelled"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), closed_rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            "the server must observe the active connection closing"
+        );
+    }
+    #[tokio::test]
+    async fn cancelling_before_response_headers_closes_the_active_connection() {
+        assert_active_request_disconnects(false).await;
+    }
+    #[tokio::test]
+    async fn cancelling_during_generation_closes_the_active_stream() {
+        assert_active_request_disconnects(true).await;
     }
     #[tokio::test]
     async fn cancelled_and_redirected_requests_never_reach_the_next_host() {

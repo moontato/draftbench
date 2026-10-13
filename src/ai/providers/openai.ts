@@ -50,10 +50,20 @@ export const nativeTransport: Transport = async (request, signal) => {
   }
   signal?.addEventListener('abort', cancel, { once: true })
   try {
-    const result = await invoke('ai_http', { request })
+    // Only this transport consumes SSE. Inject the flag at the native boundary
+    // so JSON-only evaluation/custom transports keep their existing contract.
+    const wireRequest =
+      request.route === 'chat/completions' &&
+      request.body &&
+      typeof request.body === 'object' &&
+      !Array.isArray(request.body)
+        ? { ...request, body: { ...request.body, stream: true } }
+        : request
+    const result = await invoke('ai_http', { request: wireRequest })
     if (signal?.aborted) throw new ProviderError('cancelled', 'Request cancelled.')
     return result
   } catch (error) {
+    if (signal?.aborted) throw new ProviderError('cancelled', 'Request cancelled.')
     if (error instanceof ProviderError) throw error
     if (error && typeof error === 'object' && 'kind' in error && 'message' in error) {
       throw new ProviderError(

@@ -4,7 +4,9 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.4 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.5 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+
+v0.2.5 improves active-request cancellation using streamed SSE transport for desktop inference, while still validating the complete answer before publishing findings. This includes native Rust changes and requires a rebuilt desktop app. Cancellation against a live llama-server router-mode instance remains unverified.
 
 v0.2.4 adds per-run reviewer multi-selection: choose a checkbox-selected batch, scope, and optional cache bypass without changing your profiles. Choices persist during the session, and findings from unselected reviewers stay intact.
 
@@ -120,7 +122,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.4**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.5**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -218,7 +220,7 @@ Migrated single-backend setups retain v0.1's same-model policy and existing glob
 
 Start with **2** if your inference server supports concurrent requests. For llama.cpp, configure the server's supported parallel-slot setting (commonly `--parallel` / `-np`) separately; Draftbench does not configure slots or load models. Higher concurrency can increase KV-cache/RAM/VRAM pressure and is not guaranteed to improve speed if the server serializes requests internally. Timeouts begin when requests are sent, not while waiting for a Draftbench job slot.
 
-Cancel stops queued work and cancels all active review requests. In-flight jobs are drained before the run is completed; one reviewer's failure does not stop other reviewers. Exact mapping, stale-result checks, and reviewed fixes remain unchanged. Scheduling does not alter analyzer prompts or cache/saved-review identity, so changing only the job limit does not invalidate reusable reviews.
+Cancel stops queued work and closes all active native review HTTP requests. Completions request **streamed SSE transport** so llama-server can detect the disconnect during decoding, rather than only after a buffered response finishes. Native HTTP reassembles the final answer; partial content and separate reasoning never become findings. Ordinary JSON responses from servers that ignore the streaming flag remain supported. Remote compute actually stopping depends on the server honoring disconnects and any reverse proxy forwarding them; Draftbench does not send a server-wide stop or interrupt other clients. In-flight jobs are drained before the run is completed; one reviewer's failure does not stop other reviewers. Exact mapping, stale-result checks, and reviewed fixes remain unchanged. Scheduling does not alter analyzer prompts or cache/saved-review identity, so changing only the job limit does not invalidate reusable reviews.
 
 Effective configuration is resolved once and shared by requests, provenance, freshness checks, and cache keys. Changing a model invalidates only that analyzer's applicable cache. Timeout/temperature/output-budget changes also change cache identity. Backend display-name changes do not change inference identity; endpoint/model/options/credential changes do. Custom prompt/scope changes version the reviewer and invalidate incompatible results.
 
