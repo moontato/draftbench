@@ -16,6 +16,7 @@ import { readMarkdown, writeMarkdown } from '../documents/markdown'
 import { snapshot } from '../editor/blocks'
 import { applyFix, decorate, jumpTo } from '../editor/diagnostics'
 import { analyzerEnabled, getProfiles, globallyEnabled, type ProfileId } from '../profiles/profiles'
+import { reconcileReviewContexts } from '../profiles/reviewContext'
 import {
   effectiveConfig,
   configurationHash,
@@ -463,7 +464,15 @@ export function useWorkspaceSession() {
     setStatus((old) =>
       old.startsWith('Saved review') ? 'Document changed since the saved review.' : old,
     )
-    setFindings((old) => reviewEditHistory.current.update(old, before, snap, transaction))
+    setFindings((old) =>
+      reconcileReviewContexts(
+        reviewEditHistory.current.update(old, before, snap, transaction),
+        analyzers,
+        settingsRef.current,
+        profile,
+        snap,
+      ),
+    )
   }
   useEffect(() => {
     const active = sessionRef.current,
@@ -646,10 +655,25 @@ export function useWorkspaceSession() {
     await storage.setMetadata('project', meta.current, project?.root)
   }
   const changeProfile = async (value: ProfileId) => {
+    const previous = profile
+    if (value === previous) return
     setProfile(value)
-    setStatus('')
     running.current?.abort()
-    setFindings([])
+    // Keep findings whose reviewers still apply to this profile; flag the rest for a
+    // fresh review instead of clearing the whole pane.
+    const nextFindings = reconcileReviewContexts(
+      findings,
+      analyzers,
+      settingsRef.current,
+      value,
+      currentRef.current,
+    )
+    setFindings(nextFindings)
+    setStatus(
+      nextFindings.some((f) => f.needsRerun)
+        ? 'Profile changed. Shared reviews kept; rerun flagged reviewers for fresh context.'
+        : 'Profile changed.',
+    )
     if (session) {
       meta.current.documents[session.path] = { id: session.id, profile: value }
       await storage.setMetadata('project', meta.current, project?.root)
@@ -694,12 +718,18 @@ export function useWorkspaceSession() {
     )
       setStatus('Analysis settings changed since the saved review.')
     setFindings((old) =>
-      old.filter(
-        (f) =>
-          (!inputBudgetsChanged || f.engine.kind !== 'ai') &&
-          analyzerEnabled(parsed, f.analyzerId, nextProfile) &&
-          nextAnalyzers.some((a) => a.id === f.analyzerId && a.version === f.analyzerVersion) &&
-          f.configurationHash === configurationHash(effectiveConfig(parsed, f.analyzerId)),
+      reconcileReviewContexts(
+        old.filter(
+          (f) =>
+            (!inputBudgetsChanged || f.engine.kind !== 'ai') &&
+            analyzerEnabled(parsed, f.analyzerId, nextProfile) &&
+            nextAnalyzers.some((a) => a.id === f.analyzerId && a.version === f.analyzerVersion) &&
+            f.configurationHash === configurationHash(effectiveConfig(parsed, f.analyzerId)),
+        ),
+        nextAnalyzers,
+        parsed,
+        nextProfile,
+        currentRef.current,
       ),
     )
     showNotice('Settings saved locally.')

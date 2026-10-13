@@ -94,5 +94,37 @@
     "analyzer": "structure",
     "expectedBehavior": "A clear action, relevant context and explicit next step need no formulaic restructuring.",
     "expectNoFindings": true
+  },
+  {
+    "id": "clarity-cross-paragraph-transition-clean",
+    "profile": "general",
+    "source": "I spent two years abroad and I did not know what I wanted to dedicate the rest of my life to.\n\nThat was until I took my first physics class. It showed me how much I enjoy understanding how things work.",
+    "analyzer": "clarity",
+    "expectedBehavior": "The second paragraph's reference resolves against the first; a clear cross-paragraph transition must not be flagged for a supposedly missing prior state.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "development-generic-claims",
+    "profile": "essay",
+    "source": "I have always been a creative and hard-working person who loves learning. My experiences have shaped me into the person I am today. I am confident that my background makes me a strong candidate.",
+    "analyzer": "development",
+    "expectedBehavior": "Flag the generic, unsupported claims as a development opportunity, with guidance or a question rather than invented specifics, praise, or a prescribed outline.",
+    "expectedQuote": "shaped me into the person I am today"
+  },
+  {
+    "id": "development-supported-claim-clean",
+    "profile": "essay",
+    "source": "During the two-year program I kept a 3.8 GPA while working twenty hours a week as a lab technician. When the lab's calibration routine started producing inconsistent readings, I rebuilt the spreadsheet that tracked sensor drift, and the error rate dropped from four percent to under one.",
+    "analyzer": "development",
+    "expectedBehavior": "Concrete, supported claims with a verifiable result should not be flagged as underdeveloped or in need of more examples.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "development-technical-prerequisite",
+    "profile": "technical",
+    "source": "Set the threshold to the drift value from step 2 and restart the collector.\n\nThe collector then reports anomalies every minute to the log service.",
+    "analyzer": "development",
+    "expectedBehavior": "In technical writing, flag the undefined prerequisite (the drift value from an absent step 2) as a reader-facing problem, without rewriting the whole procedure.",
+    "expectedQuote": "drift value from step 2"
   }
 ]

@@ -164,6 +164,7 @@ export async function evaluateCase(
       true,
       jobs,
       settings.analysis,
+      test.profile,
     )
     findings = result.findings
     warnings = result.warnings

@@ -177,6 +177,7 @@ export function createReviewRun(context: ReviewRunContext) {
           force,
           jobs,
           runSettings.analysis,
+          profile,
         )
         if (
           controller.signal.aborted ||
@@ -257,7 +258,10 @@ export function createReviewRun(context: ReviewRunContext) {
       currentRef.current?.hash === input.hash &&
       serializedHash === hash(writeMarkdown(active.source, editor.getMarkdown()))
     ) {
+      // Previous-context findings stay visible but cannot be saved as current.
+      // SavedReviews also independently verifies each finding's policy fingerprint.
       const valid = reviewedFindings.flatMap((f) => {
+        if (f.needsRerun) return []
         const refreshed = refreshDiagnostic(f, currentRef.current!)
         return refreshed ? [refreshed] : []
       })

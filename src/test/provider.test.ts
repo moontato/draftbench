@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { OpenAICompatibleProvider, normalizeServer, type Transport } from '../ai/providers/openai'
 import { ProviderError } from '../ai/types'
 import { defaultSettings } from '../settings/model'
+import { reviewSchema } from '../analyzers/llm/semantic'
 const config = defaultSettings().ai
 const request = { system: 'Review only.', user: 'Document.', schema: { type: 'object' } }
 const completion = (content = '{"issues":[]}') => ({
@@ -35,6 +36,35 @@ describe('OpenAI-compatible provider', () => {
       new AbortController().signal,
     )
     expect(transport.mock.calls[1][0].body).toMatchObject({ model: 'qwen3-14b' })
+  })
+  it('sends a review schema whose object properties all satisfy strict-output requirements', async () => {
+    function checkSchema(schema: Record<string, unknown>) {
+      if (schema.type === 'object') {
+        const properties = schema.properties as Record<string, Record<string, unknown>>
+        expect(schema.additionalProperties).toBe(false)
+        expect([...(schema.required as string[])].sort()).toEqual(Object.keys(properties).sort())
+        Object.values(properties).forEach(checkSchema)
+      }
+      if (schema.items) checkSchema(schema.items as Record<string, unknown>)
+    }
+    const transport = vi.fn<Transport>().mockImplementation(async (nativeRequest) => {
+      const body = nativeRequest.body as {
+        response_format: {
+          type: string
+          json_schema: { strict: boolean; schema: Record<string, unknown> }
+        }
+      }
+      expect(body.response_format.type).toBe('json_schema')
+      expect(body.response_format.json_schema.strict).toBe(true)
+      checkSchema(body.response_format.json_schema.schema)
+      return completion()
+    })
+    await new OpenAICompatibleProvider(transport).completeStructured(
+      { ...request, schema: reviewSchema },
+      config,
+      new AbortController().signal,
+    )
+    expect(transport).toHaveBeenCalledTimes(1)
   })
   it('falls back only for explicit unsupported structured formats', async () => {
     const transport = vi

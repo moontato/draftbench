@@ -413,8 +413,9 @@ describe('cache and model inheritance', () => {
       signal,
       cache,
     )
-    expect(after.cacheHits).toBe(1)
-    expect(provider.completeStructured).toHaveBeenCalledTimes(5)
+    // The edited paragraph and its neighbor-dependent review both miss the cache.
+    expect(after.cacheHits).toBe(0)
+    expect(provider.completeStructured).toHaveBeenCalledTimes(6)
     const restored = new AnalysisCache()
     restored.import(cache.export())
     expect(

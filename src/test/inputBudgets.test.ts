@@ -119,11 +119,12 @@ describe('configurable input budgets', () => {
     const mock = provider(),
       budgets = { paragraphInputChars: 1000, documentInputChars: 1000 }
     const input = snapshot(['A'.repeat(900), 'B'.repeat(200)])
-    expect((await run(clarity, input, mock, budgets)).requests).toBe(2)
+    // Both nearby units (900 + 200 neighboring context) exceed the 1000-character budget.
+    expect((await run(clarity, input, mock, budgets)).requests).toBe(0)
     expect((await run(ambiguousReference, input, mock, budgets)).requests).toBe(0)
     input.blocks[1].type = 'codeBlock'
     expect((await run(structure, input, mock, budgets)).requests).toBe(0)
-    expect(mock.completeStructured).toHaveBeenCalledTimes(2)
+    expect(mock.completeStructured).toHaveBeenCalledTimes(0)
   })
   it('sends the entire oversized paragraph/document when its configured budget permits it', async () => {
     const text = 'A'.repeat(60000),

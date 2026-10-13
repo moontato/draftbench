@@ -215,6 +215,15 @@ export function ProblemsPanel(props: Props) {
                   {f.contextChanged && (
                     <span className="finding-link">Context changed · review carefully</span>
                   )}
+                  {f.needsRerun && (
+                    <span className="finding-link">
+                      {f.needsRerun === 'genre'
+                        ? 'Needs a rerun for this profile'
+                        : f.needsRerun === 'disabled'
+                          ? 'Reviewer disabled in this profile'
+                          : 'Reviewer settings changed · rerun'}
+                    </span>
+                  )}
                   <span className="finding-message">{f.message}</span>
                   <span className="finding-quote">
                     “{f.quote.length > 100 ? f.quote.slice(0, 100) + '…' : f.quote}”
@@ -267,6 +276,18 @@ export function ProblemsPanel(props: Props) {
                   for a fresh review.
                 </p>
               )}
+              {chosen.needsRerun && (
+                <p role="note">
+                  {chosen.needsRerun === 'genre'
+                    ? 'This finding’s review context does not match the current writing profile. The quoted text is unchanged; rerun this reviewer for the current genre guidance.'
+                    : chosen.needsRerun === 'disabled'
+                      ? 'This reviewer is not enabled in the current profile. This previous-review finding remains visible; dismiss it, or enable the reviewer and rerun it. Returning to a compatible profile restores its current status.'
+                      : 'This finding was made with a different reviewer version or inference settings. Rerun this reviewer to refresh it before relying on the advice.'}
+                  {chosen.reviewContext && (
+                    <> Originally reviewed for: {chosen.reviewContext.profile}.</>
+                  )}
+                </p>
+              )}
               <p>{chosen.explanation}</p>
               {chosen.replacements && chosen.replacements.length > 1 && (
                 <label className="field">
@@ -301,6 +322,14 @@ export function ProblemsPanel(props: Props) {
                   </div>
                 </>
               )}
+              {chosen.action !== 'replace' && chosen.guidance && (
+                <>
+                  <span className="eyebrow">
+                    {chosen.action === 'question' ? 'A QUESTION FOR YOU' : 'REVISION GUIDANCE'}
+                  </span>
+                  <div className="source-review">{chosen.guidance}</div>
+                </>
+              )}
               <button
                 className="engine-toggle text-button"
                 aria-expanded={engineOpen}
@@ -315,6 +344,12 @@ export function ProblemsPanel(props: Props) {
                     {props.analyzers.find((a) => a.id === chosen.analyzerId)?.name} ·{' '}
                     {chosen.analyzerVersion}
                   </dd>
+                  {chosen.reviewContext && (
+                    <>
+                      <dt>Review profile</dt>
+                      <dd>{chosen.reviewContext.profile}</dd>
+                    </>
+                  )}
                   <dt>Engine</dt>
                   <dd>{chosen.engine.name}</dd>
                   {chosen.engine.backend && (

@@ -35,10 +35,10 @@ Example for the current version, **provided the tag does not already exist**:
 
 ```sh
 npm test -- src/test/version.test.ts src/test/releaseTag.test.ts
-npx tsx scripts/check-release-tag.ts v0.2.1
+npx tsx scripts/check-release-tag.ts v0.2.3
 git push origin main
-git tag -a v0.2.1 -m 'Draftbench v0.2.1'
-git push origin v0.2.1
+git tag -a v0.2.3 -m 'Draftbench v0.2.3'
+git push origin v0.2.3
 ```
 
 Watch **Actions → Release Draftbench**. When both platforms and publication succeed, downloads appear at [GitHub Releases](https://github.com/moontato/draftbench/releases). A tag that existed before the workflow was committed will not retroactively trigger it; normally release the next patch rather than deleting a published tag.

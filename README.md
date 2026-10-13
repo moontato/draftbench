@@ -4,9 +4,9 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.1 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.3 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
-v0.2.1 is a stabilization release: safer save/copy/close sequencing, project-pinned metadata, non-destructive configuration repair, validated/locked credential operations, bounded Harper work, and focused diagnostic/accessibility polish. No new product capabilities or schema changes. See [stabilization findings and verification](docs/stabilization-v021.md).
+v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development review, and genre-aware review continuity while preserving the v0.2.2 Apply/Undo/Redo lifecycle. It retains the v0.2.1 document, settings, and credential safety improvements; see [stabilization findings and verification](docs/stabilization-v021.md).
 
 ## What works
 
@@ -17,7 +17,7 @@ v0.2.1 is a stabilization release: safer save/copy/close sequencing, project-pin
 - Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings.
 - A small History button at the top of the Analysis pane shows the document's previous manual runs, reviewer/model provenance, scope, finding counts, cache reuse, and outcomes.
 - Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
-- **Clarity**, **Ambiguous reference**, **Redundancy**, and **Structure** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
+- **Clarity**, **Ambiguous reference**, **Redundancy**, **Structure**, and **Development** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
 - Analyze document (all enabled reviewers), selection, current paragraph, or one analyzer. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
 - Configuration-driven custom AI reviewers: editable instructions, stable IDs, scope, severity and enablement, using the same exact-quote diagnostics and reviewed fixes as built-ins.
 - Named OpenAI-compatible backends with independent credentials/options, default backend/model inheritance, per-analyzer overrides, connection tests, and shared global/per-server concurrency limits.
@@ -106,7 +106,7 @@ The plist should name an icon resource that exists in `Contents/Resources`. If i
 3. Write normally using the prose toolbar. Save with **Ctrl+S / Cmd+S**.
 4. Configure your AI server in **Settings → AI**, or use the offline repeated-word check without AI.
 5. Choose **Analyze document**, **Analyze selection**, or a specific reviewer from **Run analyzer**. Current-paragraph analysis is also in that menu. Document-only reviewers are skipped for selection/paragraph runs; run them explicitly on the document instead.
-6. Click an underline or finding to inspect its passage and explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
+6. Click an underline or finding to inspect its passage and explanation. New AI findings carry exactly one resolution: a safe single-block replacement shown as a diff, concise revision guidance, or a focused question for the author. Older restored reviews may have only an explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
 
 On startup, **Recent projects** shows up to five previously opened folders, most recent first, with names and paths. Click one to reopen the project directly; no folder picker or automatic opening is involved. Only successful folder opens update the list, and canonical paths avoid duplicate aliases. Missing/offline/inaccessible folders are checked only when clicked, report an error, and remain removable using the entry's × button. Removing a recent entry never deletes the folder or its documents. Your current project/editor remain intact if an attempted recent folder cannot be opened. The list starts filling as folders are opened in this version.
 
@@ -118,7 +118,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.1**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.3**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
 
@@ -224,12 +224,16 @@ Profiles are analyzer presets, not hidden credential or model overrides:
 
 | Profile | Enabled by preset |
 | --- | --- |
-| General prose | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy |
-| Technical writing | All six built-in analyzers |
-| Essay | All six built-in analyzers |
+| General prose | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy, Structure, Development |
+| Technical writing | All seven built-in analyzers |
+| Essay | All seven built-in analyzers |
 | Professional email | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy |
 
-Global disable switches apply on top of presets; **Harper is initially disabled globally**. Choose Essay or Technical writing to include Structure. **Settings → Profiles** creates, duplicates, renames, edits and deletes custom presets, with built-in/custom reviewer membership and a default-profile choice. Built-in profiles remain available and read-only. Documents persist their chosen profile ID. Removing a profile safely falls back to General prose without replacing document identity. Profiles never alter backend credentials or model choices.
+Global disable switches apply on top of presets; **Harper is initially disabled globally**. Professional email excludes Structure and Development; the other built-in presets include them. **Settings → Profiles** creates, duplicates, renames, edits and deletes custom presets, with built-in/custom reviewer membership and a default-profile choice. Built-in profiles remain available and read-only. Documents persist their chosen profile ID. Removing a profile safely falls back to General prose without replacing document identity. Profiles never alter backend credentials or model choices. Development and Structure receive genre guidance from the built-in writing profiles (general prose, technical, essay); custom profiles make an explicit reviewer selection and add no genre claim, and the universal reviewers (Clarity, Ambiguous reference, Redundancy, custom reviewers) stay genre-neutral. Switching profiles preserves findings from reviewers that still apply and flags genre-specific findings for a rerun instead of clearing them. Findings retain their original review profile; returning to a compatible profile clears the flag. Disabled-reviewer findings remain visible until dismissed or replaced by a rerun after enabling the reviewer. Profile changes never initiate AI requests. Undo/Redo rechecks restored findings against the current profile, and incompatible findings are excluded from saved reviews.
+
+On upgrade, an existing custom reviewer with ID `development` is renamed to a unique `custom-development-N` ID rather than replaced by the new built-in. Its instructions, routing, and custom-profile membership are preserved. A notice asks you to save the migrated settings; startup does not overwrite the original file.
+
+The current genre policies provide defaults, not a document-purpose/audience editor. That input, a concern-type distinction independent of severity, and substantive evaluation ratings (actionability, overlap, voice preservation, useful coverage, and request cost) remain follow-up work. Evaluation pass counts remain protocol/quote proxies requiring human review, not proof of editorial quality.
 
 ### Custom AI reviewers
 

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ambiguousReference, redundancy, structure, analyzers } from '../analyzers/registry'
+import {
+  ambiguousReference,
+  development,
+  redundancy,
+  structure,
+  analyzers,
+} from '../analyzers/registry'
 import { clarity, validateResult } from '../analyzers/llm/semantic'
 import { planScope, runAnalyzer } from '../analyzers/runner'
 import { AnalysisCache } from '../analyzers/cache'
@@ -7,7 +13,7 @@ import { hash } from '../diagnostics/hash'
 import { refreshDiagnostic } from '../diagnostics/mapping'
 import type { Block, Snapshot } from '../diagnostics/types'
 import type { AIProvider } from '../ai/types'
-import { defaultSettings } from '../settings/model'
+import { defaultSettings, DEFAULT_INPUT_BUDGETS } from '../settings/model'
 function snapshot(texts: string[]): Snapshot {
   let position = 1
   const blocks: Block[] = texts.map((text, order) => {
@@ -41,6 +47,8 @@ function provider(): AIProvider {
             severity: 'suggestion',
             message: 'Review this relationship.',
             explanation: 'The relationship between ideas could be made explicit.',
+            action: 'guide',
+            guidance: 'Explain how this point follows from the previous one.',
             replacement: null,
             confidence: 0.8,
           },
@@ -52,10 +60,10 @@ function provider(): AIProvider {
 const config = defaultSettings().ai
 
 describe('semantic analyzer family and scope', () => {
-  it('registers four AI reviewers and one deterministic reviewer with one interface', async () => {
-    expect(analyzers.filter((a) => a.engine === 'ai')).toHaveLength(4)
+  it('registers five AI reviewers and one deterministic reviewer with one interface', async () => {
+    expect(analyzers.filter((a) => a.engine === 'ai')).toHaveLength(5)
     const input = snapshot(['First point.', 'This is unclear.', 'A concluding point.'])
-    for (const analyzer of [clarity, ambiguousReference, redundancy, structure]) {
+    for (const analyzer of [clarity, ambiguousReference, redundancy, structure, development]) {
       const result = await runAnalyzer(
         analyzer,
         input,
@@ -71,14 +79,18 @@ describe('semantic analyzer family and scope', () => {
       ).toBe(true)
     }
   })
-  it('includes bounded neighboring context for reference checks, not the entire document', () => {
+  it('includes bounded neighboring context for reference and clarity checks, not the entire document', () => {
     const input = snapshot(['One.', 'Two.', 'Three.', 'Four.', 'Five.'])
     input.caret = input.blocks[2].from
     const units = planScope(ambiguousReference, input, 'block')
     expect(units).toHaveLength(1)
     expect(units[0].targets.map((b) => b.text)).toEqual(['Three.'])
     expect(units[0].context.map((b) => b.text)).toEqual(['Two.', 'Four.'])
-    expect(planScope(clarity, input, 'block')[0].context).toHaveLength(0)
+    expect(planScope(clarity, input, 'block')[0].context.map((b) => b.text)).toEqual([
+      'Two.',
+      'Four.',
+    ])
+    expect(planScope(redundancy, input, 'document')[0].context).toHaveLength(0)
   })
   it('rejects selection scope for document-only reviewers, without contacting a model', async () => {
     const input = snapshot(['One.', 'Two.'])
@@ -261,6 +273,8 @@ describe('semantic analyzer family and scope', () => {
       severity: 'suggestion',
       message: 'Review this.',
       explanation: 'A relationship.',
+      action: 'guide',
+      guidance: 'State the connection explicitly.',
       replacement: null,
     }
     const parsed = validateResult({
@@ -271,5 +285,56 @@ describe('semantic analyzer family and scope', () => {
   })
   it('rejects corrupt cache metadata', () => {
     expect(() => new AnalysisCache().import({ version: 999, entries: [] })).toThrow('corrupt')
+  })
+})
+describe('genre-aware review context', () => {
+  const signal = new AbortController().signal
+  const runWith = (
+    analyzer: typeof structure | typeof clarity,
+    profile: string,
+    cache: AnalysisCache,
+    mock: ReturnType<typeof provider>,
+  ) =>
+    runAnalyzer(
+      analyzer,
+      snapshot(['One.', 'Two.']),
+      'document',
+      config,
+      mock,
+      signal,
+      cache,
+      false,
+      undefined,
+      DEFAULT_INPUT_BUDGETS,
+      profile,
+    )
+  it('adds built-in genre guidance to profile-aware reviewers only', async () => {
+    const mock = provider()
+    await runWith(structure, 'essay', new AnalysisCache(), mock)
+    expect(vi.mocked(mock.completeStructured).mock.calls.at(-1)![0].system).toContain(
+      'personal statement',
+    )
+    await runWith(structure, 'general', new AnalysisCache(), mock)
+    expect(vi.mocked(mock.completeStructured).mock.calls.at(-1)![0].system).toContain(
+      'general prose',
+    )
+    // Custom profiles make an explicit reviewer selection; they supply no genre claim.
+    await runWith(structure, 'work-email', new AnalysisCache(), mock)
+    const customPrompt = vi.mocked(mock.completeStructured).mock.calls.at(-1)![0].system
+    expect(customPrompt).not.toContain('personal statement')
+    expect(customPrompt).not.toContain('general prose')
+    await runWith(clarity, 'essay', new AnalysisCache(), mock)
+    expect(vi.mocked(mock.completeStructured).mock.calls.at(-1)![0].system).not.toContain(
+      'personal statement',
+    )
+  })
+  it('includes the writing profile in cache identity only for genre-aware reviewers', async () => {
+    const mock = provider(),
+      genreCache = new AnalysisCache(),
+      neutralCache = new AnalysisCache()
+    await runWith(structure, 'essay', genreCache, mock)
+    expect((await runWith(structure, 'general', genreCache, mock)).cacheHits).toBe(0)
+    await runWith(clarity, 'essay', neutralCache, mock)
+    expect((await runWith(clarity, 'general', neutralCache, mock)).cacheHits).toBe(2)
   })
 })

@@ -6,6 +6,7 @@ import {
   customAnalyzerSchema,
   customProfileSchema,
   stableId,
+  uniqueId,
 } from './definitions'
 
 export const AI_LIMITS = { timeoutMs: 30 * 60 * 1000, maxTokens: 32768 } as const
@@ -261,6 +262,47 @@ export function loadSettings(raw: unknown): {
   const warnings: string[] = []
   if (!data || typeof data !== 'object')
     return { settings: settingsSchema.parse(data), warnings, migrated }
+  // `development` was a valid custom ID before the built-in reviewer existed.
+  // Preserve its instructions, routing, and profile membership instead of replacing
+  // the author's task with the new built-in. Warn rather than overwriting disk at startup.
+  if (Array.isArray(data.customAnalyzers)) {
+    const index = data.customAnalyzers.slice(0, 40).findIndex((entry) => {
+      const parsed = customAnalyzerSchema.safeParse(entry)
+      return parsed.success && parsed.data.id === 'development'
+    })
+    if (index >= 0) {
+      const configs =
+        data.analyzers && typeof data.analyzers === 'object' && !Array.isArray(data.analyzers)
+          ? (data.analyzers as Record<string, unknown>)
+          : undefined
+      const id = uniqueId('custom-development', [
+        ...BUILTIN_ANALYZER_IDS,
+        ...data.customAnalyzers.flatMap((entry) =>
+          entry && typeof entry.id === 'string' ? [entry.id] : [],
+        ),
+        ...Object.keys(configs ?? {}),
+      ])
+      data.customAnalyzers[index] = { ...data.customAnalyzers[index], id }
+      if (configs && Object.hasOwn(configs, 'development')) {
+        configs[id] = configs.development
+        delete configs.development
+      }
+      if (Array.isArray(data.customProfiles))
+        data.customProfiles = data.customProfiles.map((profile) =>
+          profile && typeof profile === 'object' && Array.isArray(profile.enabled)
+            ? {
+                ...profile,
+                enabled: profile.enabled.map((member: unknown) =>
+                  member === 'development' ? id : member,
+                ),
+              }
+            : profile,
+        )
+      warnings.push(
+        `Custom reviewer “development” renamed to “${id}” to avoid the new built-in ID. Instructions, routing, and profile membership retained; Save settings to persist the migration.`,
+      )
+    }
+  }
   const isolate = (key: string, schema: z.ZodType, reserved: readonly string[], limit: number) => {
     const used = new Set(reserved),
       result: unknown[] = []

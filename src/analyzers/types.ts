@@ -13,6 +13,7 @@ export interface AnalyzerContext {
   provider: AIProvider
   signal: AbortSignal
   scope: Scope
+  profile?: string
   priorState?: unknown
 }
 export interface AnalyzerResult {
@@ -29,6 +30,8 @@ export interface Analyzer {
   origin?: 'builtin' | 'custom'
   engineName?: string
   instructions?: string
+  /** The writing profile's genre guidance is part of this reviewer's prompt and cache identity. */
+  profileAware?: boolean
   scopes: Scope[]
   analyze(context: AnalyzerContext): Promise<AnalyzerResult>
 }

@@ -5,11 +5,27 @@ export interface WritingProfile {
   description?: string
   enabled: string[]
 }
-const all = ['repeated-word', 'harper', 'clarity', 'ambiguous-reference', 'redundancy', 'structure']
+const all = [
+  'repeated-word',
+  'harper',
+  'clarity',
+  'ambiguous-reference',
+  'redundancy',
+  'structure',
+  'development',
+]
 export const profiles: Record<string, WritingProfile> = {
   general: {
     name: 'General prose',
-    enabled: ['repeated-word', 'harper', 'clarity', 'ambiguous-reference', 'redundancy'],
+    enabled: [
+      'repeated-word',
+      'harper',
+      'clarity',
+      'ambiguous-reference',
+      'redundancy',
+      'structure',
+      'development',
+    ],
   },
   technical: { name: 'Technical writing', enabled: all },
   essay: { name: 'Essay', enabled: all },

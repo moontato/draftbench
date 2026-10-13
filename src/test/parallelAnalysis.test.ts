@@ -67,6 +67,8 @@ function delayedProvider() {
               severity: 'suggestion',
               message: 'Review.',
               explanation: 'Review this passage.',
+              action: 'guide',
+              guidance: 'Clarify the relationship between these points.',
               replacement: null,
               confidence: 0.8,
             },
@@ -139,12 +141,12 @@ describe('bounded parallel analysis', () => {
     const first = await batch()
     expect(mock.peak).toBe(3)
     expect(mock.active).toBe(0)
-    expect(first.reduce((n, r) => n + r.requests, 0)).toBe(14)
+    expect(first.reduce((n, r) => n + r.requests, 0)).toBe(15)
     expect(first[0].findings.map((f) => f.blockId)).toEqual(input().blocks.map((b) => b.id))
     const calls = vi.mocked(mock.provider.completeStructured).mock.calls.length
     settings.analysis.parallelJobs = 2 // Scheduling is not part of inference/cache identity.
     const cached = await batch()
-    expect(cached.reduce((n, r) => n + r.cacheHits, 0)).toBe(14)
+    expect(cached.reduce((n, r) => n + r.cacheHits, 0)).toBe(15)
     expect(vi.mocked(mock.provider.completeStructured).mock.calls).toHaveLength(calls)
     await batch(true)
     expect(vi.mocked(mock.provider.completeStructured).mock.calls).toHaveLength(calls * 2)

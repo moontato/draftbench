@@ -19,6 +19,7 @@ import {
   type Settings,
 } from '../settings/model'
 import { validateResult } from './llm/semantic'
+import { reviewContextFor, reviewContextMatches } from '../profiles/reviewContext'
 import { engineMetadata } from './runner'
 import type { Analyzer } from './types'
 
@@ -27,6 +28,7 @@ const sourceSchema = z.object({
   id: z.string().min(1).max(100),
   version: z.string().min(1).max(100),
   configurationHash: digest,
+  policyHash: digest.optional(),
 })
 const findingSchema = z.object({
   analyzerId: z.string().min(1).max(100),
@@ -38,6 +40,7 @@ const findingSchema = z.object({
     .max(5000),
   documentScope: z.boolean(),
   nearby: z.boolean(),
+  reviewContext: z.object({ profile: z.string().min(1).max(64), policyHash: digest }).optional(),
 })
 const reviewSchema = z.object({
   documentId: z.string().min(1).max(100),
@@ -61,7 +64,13 @@ export interface SavedReviewSummary {
   analyzedAt: number
   profile: ProfileId
   scope: Scope
-  sources: { id: string; version: string; configurationHash: string; findings: number }[]
+  sources: {
+    id: string
+    version: string
+    configurationHash: string
+    policyHash?: string
+    findings: number
+  }[]
 }
 export interface RestoredReview {
   findings: Diagnostic[]
@@ -99,6 +108,9 @@ export class SavedReviews {
         id,
         version: analyzer.version,
         configurationHash: configurationHash(effectiveConfig(settings, id)),
+        policyHash: analyzer.profileAware
+          ? reviewContextFor(analyzer, profile).policyHash
+          : undefined,
       })
     }
     if (!sources.length || findings.length > 1000) return false
@@ -109,6 +121,12 @@ export class SavedReviews {
       if (
         !fresh ||
         finding.contextChanged ||
+        finding.needsRerun ||
+        !reviewContextMatches(
+          finding,
+          this.analyzers.find((a) => a.id === finding.analyzerId)!,
+          profile,
+        ) ||
         finding.analyzerVersion !== source.version ||
         finding.configurationHash !== source.configurationHash
       )
@@ -131,11 +149,13 @@ export class SavedReviews {
         severity: finding.severity,
         message: finding.message,
         explanation: finding.explanation,
+        action: finding.action,
         replacement: finding.replacement,
         replacements: finding.replacements,
+        guidance: finding.guidance,
         confidence: finding.confidence,
       }
-      const validated = validateResult({ issues: [issue] })
+      const validated = validateResult({ issues: [issue] }, 'persisted')
       if (validated.warnings.length) return false
       saved.push({
         analyzerId: finding.analyzerId,
@@ -145,6 +165,7 @@ export class SavedReviews {
         dependencies,
         documentScope: !!finding.dependencies.$document,
         nearby: !!finding.dependencies[`$neighbors:${finding.blockId}`],
+        reviewContext: finding.reviewContext,
       })
     }
     const record: SavedReview = {
@@ -194,6 +215,8 @@ export class SavedReviews {
         !analyzer ||
         analyzer.version !== source.version ||
         !this.enabled(source.id, profile, settings) ||
+        (analyzer.profileAware &&
+          source.policyHash !== reviewContextFor(analyzer, profile).policyHash) ||
         source.configurationHash !== configurationHash(effectiveConfig(settings, source.id))
       )
         return null
@@ -208,6 +231,8 @@ export class SavedReviews {
         !analyzer ||
         !block ||
         saved.issue.block_id !== String(saved.blockIndex) ||
+        (analyzer.profileAware &&
+          saved.reviewContext?.policyHash !== reviewContextFor(analyzer, profile).policyHash) ||
         block.text.slice(saved.start, saved.start + saved.issue.quote.length) !== saved.issue.quote
       )
         return null
@@ -241,6 +266,7 @@ export class SavedReviews {
         engineMetadata(analyzer, effectiveConfig(settings, analyzer.id)),
         source.configurationHash,
         dependencies,
+        saved.reviewContext,
       )
       if (!finding || !refreshDiagnostic(finding, input)) return null
       findings.push(finding)
@@ -301,7 +327,7 @@ export class SavedReviews {
       const findings: SavedFinding[] = []
       let valid = true
       for (const saved of review.findings) {
-        const result = validateResult({ issues: [saved.issue] })
+        const result = validateResult({ issues: [saved.issue] }, 'persisted')
         if (result.warnings.length) {
           valid = false
           break

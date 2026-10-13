@@ -1,5 +1,12 @@
 import { canonical, hash } from './hash'
-import type { Diagnostic, EngineMetadata, Issue, Snapshot } from './types'
+import {
+  effectiveAction,
+  type Diagnostic,
+  type EngineMetadata,
+  type Issue,
+  type ReviewContext,
+  type Snapshot,
+} from './types'
 export function resolveIssue(
   issue: Issue,
   input: Snapshot,
@@ -8,6 +15,7 @@ export function resolveIssue(
   engine: EngineMetadata,
   configurationHash: string,
   dependencies: Record<string, string>,
+  reviewContext?: ReviewContext,
 ): Diagnostic | null {
   const block = input.blocks.find((b) => b.id === issue.block_id)
   if (!block || !issue.quote) return null
@@ -43,8 +51,9 @@ export function resolveIssue(
   if (input.selection && (from < input.selection.from || to > input.selection.to)) return null
   return {
     ...issue,
+    action: effectiveAction(issue),
     id: hash(
-      [
+      canonical([
         input.documentId,
         analyzerId,
         version,
@@ -52,13 +61,19 @@ export function resolveIssue(
         block.id,
         block.hash,
         start,
-        canonical(dependencies),
+        dependencies,
         issue.category,
         issue.severity,
         issue.message,
         issue.explanation,
-        issue.replacement ?? '',
-      ].join('|'),
+        {
+          action: effectiveAction(issue),
+          replacement: issue.replacement,
+          replacements: issue.replacements,
+          guidance: issue.guidance,
+          reviewPolicy: reviewContext?.policyHash,
+        },
+      ]),
     ),
     analyzerId,
     analyzerVersion: version,
@@ -75,6 +90,7 @@ export function resolveIssue(
     dependencies,
     engine,
     configurationHash,
+    reviewContext,
   }
 }
 export function refreshDiagnostic(finding: Diagnostic, current: Snapshot): Diagnostic | null {

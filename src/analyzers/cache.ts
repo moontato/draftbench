@@ -4,6 +4,7 @@ import { inferenceConfig, type EffectiveConfig } from '../settings/model'
 import type { Issue } from '../diagnostics/types'
 import type { AnalysisUnit, Analyzer, AnalyzerResult } from './types'
 import { validateResult } from './llm/semantic'
+import { reviewContextFor } from '../profiles/reviewContext'
 interface Cached {
   issues: Issue[]
   warnings: string[]
@@ -11,12 +12,16 @@ interface Cached {
 }
 export class AnalysisCache {
   private entries = new Map<string, Cached>()
-  key(analyzer: Analyzer, unit: AnalysisUnit, config: EffectiveConfig): string {
+  key(analyzer: Analyzer, unit: AnalysisUnit, config: EffectiveConfig, profile?: string): string {
     return hash(
       canonical({
         analyzer: analyzer.id,
         version: analyzer.version,
         config: inferenceConfig(config),
+        // Genre policy changes the prompt, so it changes review identity too.
+        policyHash: analyzer.profileAware
+          ? reviewContextFor(analyzer, profile).policyHash
+          : undefined,
         targets: unit.targets.map((b) => [
           b.type,
           b.headingLevel ?? null,
@@ -59,8 +64,10 @@ export class AnalysisCache {
           severity: i.severity,
           message: i.message,
           explanation: i.explanation,
+          action: i.action,
           replacement: i.replacement,
           replacements: i.replacements,
+          guidance: i.guidance,
           confidence: i.confidence,
           offset: i.offset,
         }))
@@ -106,7 +113,7 @@ export class AnalysisCache {
     if (!parsed.success)
       throw new Error('Analysis cache is incompatible or corrupt; a fresh cache will be used.')
     for (const [key, entry] of parsed.data.entries) {
-      const result = validateResult(entry)
+      const result = validateResult(entry, 'persisted')
       if (!result.warnings.length) this.entries.set(key, { ...result, used: entry.used })
     }
     this.prune()

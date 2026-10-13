@@ -11,6 +11,7 @@ interface FixtureSeed {
   unavailableProjects?: string[]
   recentLoadDelayMs?: number
   recentWriteFails?: boolean
+  reviewAction?: 'replace' | 'guide' | 'question'
 }
 async function installDesktopFixture(
   page: import('@playwright/test').Page,
@@ -279,7 +280,17 @@ async function installDesktopFixture(
                               message: 'Unclear referent hides the point.',
                               explanation:
                                 'Name the proposal instead of using an unclear reference.',
-                              replacement: 'The proposal is unclear.',
+                              action: seed.reviewAction ?? 'replace',
+                              replacement:
+                                !seed.reviewAction || seed.reviewAction === 'replace'
+                                  ? 'The proposal is unclear.'
+                                  : null,
+                              guidance:
+                                seed.reviewAction === 'question'
+                                  ? 'Which proposal do you mean here?'
+                                  : seed.reviewAction === 'guide'
+                                    ? 'Name the proposal and the specific unresolved issue.'
+                                    : null,
                               confidence: 0.87,
                             },
                           ]
@@ -1064,7 +1075,7 @@ test('parallel jobs persist, bound full-review requests, reuse cache, and preser
     .getByRole('contentinfo')
     .getByRole('button', { name: 'Analyze document', exact: true })
     .click()
-  await expect(page.locator('.analysis-status')).toContainText('13 cached reviews')
+  await expect(page.locator('.analysis-status')).toContainText('15 cached reviews')
   expect(
     await page.evaluate(
       () =>
@@ -1196,7 +1207,7 @@ test('a failed parallel reviewer does not stop the others or capture a partial s
     .click()
   await expect(page.locator('.analysis-status')).toContainText('completed with warnings')
   await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
-    2,
+    4,
   )
   await expect
     .poll(() =>
@@ -1314,7 +1325,7 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   await expect(page.locator('.analysis-status')).toContainText('findings ·')
   await expect(page.locator('.analysis-status')).not.toContainText('warnings')
   await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toHaveCount(
-    3,
+    5,
   )
   await page.getByRole('button', { name: 'Analysis history', exact: true }).click()
   await expect(page.locator('.history-input-budgets').first()).toContainText('64,000')
@@ -1389,6 +1400,140 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   )
   await expect(reopened.getByLabel('Document input budget (characters)')).toHaveValue('48000')
   await reopened.close()
+})
+
+for (const action of ['guide', 'question'] as const) {
+  test(`${action} feedback has no Apply action and survives cache reuse and saved-review restoration`, async ({
+    page,
+    context,
+  }) => {
+    await installDesktopFixture(page, { reviewAction: action })
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Open a writing folder' }).click()
+    await page.getByRole('button', { name: 'essay', exact: true }).click()
+    await page.locator('.run-controls summary').click()
+    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await expect(page.locator('.analysis-status')).toContainText('findings ·')
+    await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+    const label = action === 'question' ? 'A QUESTION FOR YOU' : 'REVISION GUIDANCE'
+    const text =
+      action === 'question'
+        ? 'Which proposal do you mean here?'
+        : 'Name the proposal and the specific unresolved issue.'
+    await expect(page.getByText(label, { exact: true })).toBeVisible()
+    await expect(page.getByText(text, { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Apply suggestion' })).toHaveCount(0)
+    const requests = await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (c) => c.command === 'ai_http',
+        ).length,
+    )
+    await page.locator('.run-controls summary').click()
+    await page.getByRole('button', { name: 'Clarity', exact: true }).click()
+    await expect(page.locator('.analysis-status')).toContainText('cached reviews')
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+            (c) => c.command === 'ai_http',
+          ).length,
+      ),
+    ).toBe(requests)
+    const seed = await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          fixture: {
+            files: Record<string, string>
+            metadata: Record<string, unknown>
+            settings: unknown
+          }
+        }
+      ).fixture
+      return { files: fixture.files, metadata: fixture.metadata, settings: fixture.settings }
+    })
+    const reopened = await context.newPage()
+    await installDesktopFixture(reopened, { ...seed, reviewAction: action })
+    await reopened.goto('/')
+    await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
+    await reopened.getByRole('button', { name: 'essay', exact: true }).click()
+    await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+    await reopened.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+    await expect(reopened.getByText(label, { exact: true })).toBeVisible()
+    await expect(reopened.getByText(text, { exact: true })).toBeVisible()
+    await expect(reopened.getByRole('button', { name: 'Apply suggestion' })).toHaveCount(0)
+    expect(
+      await reopened.evaluate(
+        () =>
+          (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+            (c) => c.command === 'ai_http',
+          ).length,
+      ),
+    ).toBe(0)
+    await reopened.close()
+  })
+}
+
+test('profile switches and Undo keep old genre findings flagged until a fresh rerun', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByLabel('Writing profile').selectOption('essay')
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  await page.getByLabel('Filter by analyzer').selectOption('clarity')
+  await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await page.getByRole('button', { name: 'Apply suggestion' }).click()
+  await page.getByLabel('Writing profile').selectOption('technical')
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await page.getByLabel('Filter by analyzer').selectOption('all')
+  await expect(page.getByText('Needs a rerun for this profile')).toHaveCount(2)
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  await expect(page.getByText('Needs a rerun for this profile')).toHaveCount(0)
+})
+
+test('profile changes keep shared findings and flag genre-specific reviews for rerun', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByLabel('Writing profile')).toHaveValue('general')
+  await page.getByLabel('Writing profile').selectOption('essay')
+  await expect(page.getByLabel('Writing profile')).toHaveValue('essay')
+  await page
+    .getByRole('contentinfo')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.locator('.analysis-status')).toContainText('findings ·')
+  // Essay → General prose: shared reviewers keep their findings; Development and
+  // Structure now use different genre guidance, so they are flagged for a rerun.
+  await page.getByLabel('Writing profile').selectOption('general')
+  await expect(page.locator('.analysis-status')).toContainText('Shared reviews kept')
+  await expect(page.getByText('Needs a rerun for this profile')).toHaveCount(2)
+  // General prose → Professional email: those reviewers are disabled outright.
+  await page.getByLabel('Writing profile').selectOption('email')
+  await expect(page.getByText('Reviewer disabled in this profile')).toHaveCount(2)
+  await page.getByLabel('Writing profile').selectOption('essay')
+  await expect(page.getByText('Reviewer disabled in this profile')).toHaveCount(0)
+  await expect(page.getByText('Needs a rerun for this profile')).toHaveCount(0)
+  // Shared reviewers remain applicable under any profile.
+  await page.getByLabel('Filter by analyzer').selectOption('clarity')
+  const clarityCard = page.getByRole('button', { name: /Unclear referent hides the point/ })
+  await expect(clarityCard).toHaveCount(1)
+  await clarityCard.click()
+  await expect(page.getByRole('button', { name: 'Apply suggestion' })).toBeEnabled()
 })
 
 test('v0.2 creates a reviewer/profile, routes two backends with bounded overlap, and restores reviews across restart', async ({

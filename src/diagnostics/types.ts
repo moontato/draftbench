@@ -1,5 +1,10 @@
 export type Severity = 'info' | 'suggestion' | 'warning' | 'error'
 export type Scope = 'selection' | 'block' | 'document'
+/** How a finding should be resolved: a safe rewrite, guidance, or a question for the author. */
+export type ReviewAction = 'replace' | 'guide' | 'question'
+export function effectiveAction(issue: Pick<Issue, 'action' | 'replacement'>): ReviewAction {
+  return issue.action ?? (issue.replacement !== undefined ? 'replace' : 'guide')
+}
 export interface Block {
   id: string
   type: string
@@ -28,6 +33,12 @@ export interface EngineMetadata {
   backend?: string
   backendId?: string
 }
+export interface ReviewContext {
+  /** The profile at review time, retained even when the current profile changes. */
+  profile: string
+  /** Fingerprint of the actual genre policy supplied to this reviewer. */
+  policyHash: string
+}
 export interface Diagnostic {
   id: string
   analyzerId: string
@@ -44,8 +55,10 @@ export interface Diagnostic {
   from: number
   to: number
   blockIndex: number
+  action: ReviewAction
   replacement?: string
   replacements?: string[]
+  guidance?: string
   confidence?: number
   revision: number
   contentHash: string
@@ -53,8 +66,14 @@ export interface Diagnostic {
   dependencies: Record<string, string>
   engine: EngineMetadata
   configurationHash: string
+  reviewContext?: ReviewContext
   /** The quote is intact, but reviewed edits changed the original analysis context. */
   contextChanged?: boolean
+  /** The finding comes from a review context that no longer matches the writing profile.
+   *  `genre`: the reviewer still applies but now uses profile-specific guidance;
+   *  `disabled`: the reviewer is not enabled in the current profile at all;
+   *  `reviewer`: the reviewer version or inference settings have changed. */
+  needsRerun?: 'genre' | 'disabled' | 'reviewer'
 }
 export interface Issue {
   block_id: string
@@ -63,8 +82,10 @@ export interface Issue {
   severity: Severity
   message: string
   explanation: string
+  action?: ReviewAction
   replacement?: string
   replacements?: string[]
+  guidance?: string
   confidence?: number
   offset?: number
 }

@@ -31,6 +31,7 @@ export const BUILTIN_ANALYZER_IDS = [
   'ambiguous-reference',
   'redundancy',
   'structure',
+  'development',
   'harper',
 ] as const
 export const BUILTIN_PROFILE_IDS = ['general', 'technical', 'essay', 'email'] as const

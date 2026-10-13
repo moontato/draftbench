@@ -2,6 +2,7 @@ import type { Analyzer, AnalysisUnit } from './types'
 import type { Block, Diagnostic, EngineMetadata, Scope, Snapshot } from '../diagnostics/types'
 import { hash } from '../diagnostics/hash'
 import { resolveIssue } from '../diagnostics/mapping'
+import { reviewContextFor } from '../profiles/reviewContext'
 import {
   configurationHash as hashConfiguration,
   DEFAULT_INPUT_BUDGETS,
@@ -79,6 +80,7 @@ export async function runAnalyzer(
   force = false,
   jobs?: AnalysisJobs,
   budgets: InputBudgets = DEFAULT_INPUT_BUDGETS,
+  profile?: string,
 ): Promise<RunResult> {
   const configurationHash = hashConfiguration(config)
   const results = await mapConcurrent(
@@ -98,11 +100,12 @@ export async function runAnalyzer(
         )
         return { findings, warnings, cacheHits, requests }
       }
-      const key = cache.key(analyzer, unit, config)
+      const key = cache.key(analyzer, unit, config, profile)
       let result = force ? undefined : cache.get(key, unit)
       if (result) cacheHits++
       else {
-        const analyze = () => analyzer.analyze({ input, unit, scope, config, provider, signal })
+        const analyze = () =>
+          analyzer.analyze({ input, unit, scope, config, provider, signal, profile })
         result = await (jobs && analyzer.engine === 'ai'
           ? jobs.run(signal, analyze, config.backendId)
           : analyze())
@@ -141,6 +144,7 @@ export async function runAnalyzer(
           engineMetadata(analyzer, config),
           configurationHash,
           dependencies,
+          reviewContextFor(analyzer, profile),
         )
         if (finding) {
           findings.push(finding)

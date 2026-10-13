@@ -44,8 +44,14 @@ afterEach(() => vi.unstubAllGlobals())
 describe('opt-in evaluation measurements without inference servers', () => {
   it('validates the human-editable corpus with every built-in AI reviewer and clean cases', () => {
     const cases = corpusSchema.parse(JSON.parse(readFileSync('eval/corpus.json', 'utf8')))
-    expect(cases).toHaveLength(12)
-    for (const analyzer of ['clarity', 'ambiguous-reference', 'redundancy', 'structure']) {
+    expect(cases).toHaveLength(16)
+    for (const analyzer of [
+      'clarity',
+      'ambiguous-reference',
+      'redundancy',
+      'structure',
+      'development',
+    ]) {
       expect(cases.some((c) => c.analyzer === analyzer && c.expectNoFindings)).toBe(true)
       expect(cases.some((c) => c.analyzer === analyzer && !c.expectNoFindings)).toBe(true)
     }

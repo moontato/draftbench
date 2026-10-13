@@ -1,5 +1,58 @@
 import { describe, expect, it } from 'vitest'
-import { AI_LIMITS, defaultSettings, settingsSchema } from '../settings/model'
+import { AI_LIMITS, defaultSettings, loadSettings, settingsSchema } from '../settings/model'
+
+describe('custom reviewer ID migration', () => {
+  it('preserves a legacy development reviewer, routing, and profile membership without collisions', () => {
+    const raw = defaultSettings()
+    const definition = {
+      id: 'development',
+      name: 'My development task',
+      description: '',
+      instructions: 'Check my terminology rules.',
+      scope: 'document' as const,
+      severity: 'warning' as const,
+      enabled: true,
+    }
+    raw.customAnalyzers = [
+      definition,
+      { ...definition, id: 'custom-development-1', name: 'Existing' },
+    ]
+    raw.customProfiles = [
+      {
+        id: 'my-prose',
+        name: 'My prose',
+        description: '',
+        enabled: ['development', 'custom-development-1', 'clarity'],
+      },
+    ]
+    raw.analyzers.development = { enabled: false, model: 'custom-model', backend: 'default' }
+    const loaded = loadSettings(raw)
+    const renamed = loaded.settings.customAnalyzers[0]
+    expect(renamed).toEqual({ ...definition, id: 'custom-development-2' })
+    expect(loaded.settings.analyzers[renamed.id]).toEqual(raw.analyzers.development)
+    expect(loaded.settings.analyzers.development).toEqual({ enabled: true, model: '' })
+    expect(loaded.settings.customProfiles[0].enabled).toEqual([
+      'custom-development-2',
+      'custom-development-1',
+      'clarity',
+    ])
+    expect(loaded.warnings.join(' ')).toContain(
+      'Instructions, routing, and profile membership retained',
+    )
+    expect(raw.customAnalyzers[0].id).toBe('development')
+    const reloaded = loadSettings(loaded.settings)
+    expect(reloaded.settings).toEqual(loaded.settings)
+    expect(reloaded.warnings).toEqual([])
+  })
+  it('does not reinterpret a malformed reserved custom reviewer as a valid migration', () => {
+    const loaded = loadSettings({
+      ...defaultSettings(),
+      customAnalyzers: [{ id: 'development', instructions: '' }],
+    })
+    expect(loaded.settings.customAnalyzers).toEqual([])
+    expect(loaded.warnings.join(' ')).toContain('invalid or duplicate')
+  })
+})
 
 describe('AI settings limits', () => {
   it('defaults old settings to sequential jobs and validates the concurrency cap', () => {

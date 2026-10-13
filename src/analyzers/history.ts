@@ -11,6 +11,7 @@ import {
   type EffectiveConfig,
 } from '../settings/model'
 import { getProfiles, type ProfileId } from '../profiles/profiles'
+import { reviewContextFor } from '../profiles/reviewContext'
 import type { SavedReviewSummary } from './savedReviews'
 import { createAnalysisJobs } from './jobs'
 
@@ -28,6 +29,7 @@ const reviewerSchema = z.object({
   backendId: z.string().max(64).optional(),
   parallelJobs: count.min(1).max(MAX_PARALLEL_JOBS).optional(),
   configurationHash: digest,
+  policyHash: digest.optional(),
   options: z
     .object({ timeoutMs: count, maxTokens: count, temperature: z.number().min(0).max(2) })
     .optional(),
@@ -137,6 +139,9 @@ export class AnalysisHistory {
               }
             : {}),
           configurationHash: configurationHash(config),
+          policyHash: analyzer.profileAware
+            ? reviewContextFor(analyzer, profile).policyHash
+            : undefined,
           status: 'pending',
           findings: 0,
           cacheHits: 0,
@@ -207,6 +212,7 @@ export class AnalysisHistory {
             version: source.version,
             engine: analyzer?.version === source.version ? analyzer.engine : 'unknown',
             configurationHash: source.configurationHash,
+            policyHash: source.policyHash,
             status: 'saved',
             findings: source.findings,
             cacheHits: 0,

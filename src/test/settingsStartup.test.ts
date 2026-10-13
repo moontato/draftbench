@@ -86,6 +86,28 @@ it('isolates damaged custom entries without overwriting the original settings', 
   expect(notice).toHaveBeenCalledWith(expect.stringContaining('bad-reviewer'), true)
   expect(bridge.save).not.toHaveBeenCalled()
 })
+it('preserves a custom development reviewer on upgrade without overwriting original settings at startup', async () => {
+  bridge.load.mockResolvedValue({
+    ...defaultSettings(),
+    customAnalyzers: [
+      {
+        id: 'development',
+        name: 'My task',
+        instructions: 'Check my terminology.',
+        scope: 'document',
+        severity: 'warning',
+        enabled: true,
+      },
+    ],
+    customProfiles: [{ id: 'custom-prose', name: 'Custom prose', enabled: ['development'] }],
+  })
+  await act(async () => root.render(createElement(Probe)))
+  expect(state.settings.customAnalyzers[0].id).toBe('custom-development-1')
+  expect(state.settings.customAnalyzers[0].instructions).toBe('Check my terminology.')
+  expect(state.settings.customProfiles[0].enabled).toEqual(['custom-development-1'])
+  expect(notice).toHaveBeenCalledWith(expect.stringContaining('renamed'), true)
+  expect(bridge.save).not.toHaveBeenCalled()
+})
 it('a failed native settings read permits recovery without automatically writing defaults', async () => {
   bridge.load.mockRejectedValue(new Error('Cannot read settings.'))
   await act(async () => root.render(createElement(Probe)))
