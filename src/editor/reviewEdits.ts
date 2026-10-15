@@ -25,30 +25,46 @@ export class ReviewEditHistory {
     transaction: Transaction,
   ): Diagnostic[] {
     if (before && isHistoryTransaction(transaction)) {
-      // Match both sides of the exact history transition, never an ordinary edit
-      // that happens to produce the same text. Newest matches win after branching.
+      // Restore review snapshots on real Undo/Redo, including grouped typing
+      // transactions. Ordinary edits that recreate text never resurrect removed quotes.
+      // Newest matching snapshots win after a history branch.
       const entry = [...this.entries]
         .reverse()
         .find(
           (item) =>
             item.documentId === after.documentId &&
-            ((item.beforeHash === before.hash && item.afterHash === after.hash) ||
-              (item.afterHash === before.hash && item.beforeHash === after.hash)),
+            (item.beforeHash === after.hash || item.afterHash === after.hash),
         )
       if (entry) {
         const restored =
           after.hash === entry.beforeHash ? entry.beforeFindings : entry.afterFindings
-        const refreshed = updateReviewAfterEdit(findings, before, after, transaction)
+        // Keep genuinely unaffected new reviews, but do not carry stale feedback
+        // from the state being left into a restored snapshot.
+        const refreshed = updateReviewAfterEdit(findings, before, after, transaction).filter(
+          (finding) => !finding.stale && !finding.contextChanged,
+        )
         const merged = new Map(refreshed.map((finding) => [finding.id, finding]))
         for (const finding of restored) {
           const fresh = refreshDiagnostic(finding, after)
           if (fresh) merged.set(fresh.id, fresh)
         }
-        return [...merged.values()]
+        return this.remember(findings, before, after, transaction, [...merged.values()])
       }
     }
     const next = updateReviewAfterEdit(findings, before, after, transaction)
-    if (before && transaction.getMeta(appliedSuggestionMeta) && !this.recorded.has(transaction)) {
+    return this.remember(findings, before, after, transaction, next)
+  }
+
+  private remember(
+    findings: Diagnostic[],
+    before: Snapshot | null,
+    after: Snapshot,
+    transaction: Transaction,
+    next: Diagnostic[],
+  ): Diagnostic[] {
+    // Also remember the state being left by Undo/Redo: a fresh analysis may have
+    // happened since the original edit, and Redo must restore that newer review.
+    if (before && !this.recorded.has(transaction)) {
       // React may replay a state updater. Record each transaction only once.
       this.recorded.add(transaction)
       this.entries.push({
@@ -64,8 +80,8 @@ export class ReviewEditHistory {
   }
 }
 
-// Only reviewed replacements may rebase a review. Ordinary typing still uses strict
-// invalidation, and late analysis results must never be rebased onto different text.
+// Preserve still-intact quotes through transaction mapping. Manual context changes
+// retain feedback as stale, never as applicable advice. Late AI results remain strict.
 export function updateReviewAfterEdit(
   findings: Diagnostic[],
   before: Snapshot | null,
@@ -74,7 +90,7 @@ export function updateReviewAfterEdit(
 ): Diagnostic[] {
   const appliedId = transaction.getMeta(appliedSuggestionMeta) as string | undefined
   return findings.flatMap((finding) => {
-    if (!appliedId || !before) {
+    if (!before) {
       const fresh = refreshDiagnostic(finding, after)
       return fresh ? [fresh] : []
     }
@@ -104,7 +120,7 @@ export function updateReviewAfterEdit(
       if (key === '$document') dependencies[key] = after.hash
       else if (key.startsWith('$neighbors:')) {
         const target = after.blocks.find((b) => b.id === key.slice('$neighbors:'.length))
-        if (!target) return []
+        if (!target) continue
         dependencies[key] = hash(
           JSON.stringify(
             after.blocks
@@ -114,13 +130,16 @@ export function updateReviewAfterEdit(
         )
       } else {
         const dependency = after.blocks.find((b) => b.id === key)
-        if (!dependency) return []
+        if (!dependency) continue
         dependencies[key] = dependency.hash
       }
     }
+    const reviewOrigin = finding.reviewOrigin ?? finding
+    const originalContextMatches = !!refreshDiagnostic(reviewOrigin, after)
     return [
       {
         ...finding,
+        reviewOrigin,
         from,
         to,
         start,
@@ -130,7 +149,8 @@ export function updateReviewAfterEdit(
         contentHash: after.hash,
         revision: after.revision,
         dependencies,
-        contextChanged: finding.contextChanged || !refreshDiagnostic(finding, after),
+        contextChanged: !originalContextMatches,
+        stale: !originalContextMatches && (finding.stale || !appliedId),
       },
     ]
   })

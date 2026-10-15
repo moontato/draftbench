@@ -6,11 +6,11 @@ export function useNotice() {
   const [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null)
   const showNotice = useCallback((message: string, error = false) => {
     // A fresh object restarts the timer even when the same message is shown twice.
-    setNotice({ message, error })
+    setNotice((old) => (old?.error && !error ? old : { message, error }))
   }, [])
   const dismissNotice = useCallback(() => setNotice(null), [])
   useEffect(() => {
-    if (!notice) return
+    if (!notice || notice.error) return
     const timer = setTimeout(dismissNotice, NOTICE_DURATION_MS)
     return () => clearTimeout(timer)
   }, [notice, dismissNotice])

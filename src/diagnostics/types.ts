@@ -67,8 +67,14 @@ export interface Diagnostic {
   engine: EngineMetadata
   configurationHash: string
   reviewContext?: ReviewContext
-  /** The quote is intact, but reviewed edits changed the original analysis context. */
+  /** Original AI input budgets; restoration/Undo must not erase compatibility checks. */
+  reviewInputBudgets?: { paragraphInputChars: number; documentInputChars: number }
+  /** The quote is intact, but edits changed the original analysis context. */
   contextChanged?: boolean
+  /** Transaction-mapped reference feedback after manual edits; never applicable until reviewed again. */
+  stale?: boolean
+  /** Immutable original analysis snapshot; rebasing must not redefine when a finding was reviewed. */
+  reviewOrigin?: Omit<Diagnostic, 'reviewOrigin'>
   /** The finding comes from a review context that no longer matches the writing profile.
    *  `genre`: the reviewer still applies but now uses profile-specific guidance;
    *  `disabled`: the reviewer is not enabled in the current profile at all;

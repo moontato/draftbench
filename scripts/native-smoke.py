@@ -209,8 +209,11 @@ try:
         def select_profile(identifier):
             script('const s = document.querySelector(`[aria-label="Writing profile"]`); s.value = ' + json.dumps(identifier) + '; s.dispatchEvent(new Event("change", {bubbles:true}))')
             assert script('return document.querySelector(`[aria-label="Writing profile"]`).value') == identifier
-        def analyze():
-            script('const b = [...document.querySelectorAll("footer button")].find(b => b.textContent.includes("Analyze document")); b.click()')
+        def analyze(reviewer=None):
+            if reviewer:
+                script('const m = document.querySelector(".reviewer-run-menu"); m.open = true; for (const c of m.querySelectorAll(".reviewer-run-list input")) { const wanted = c.getAttribute("aria-label") === ' + json.dumps(reviewer) + '; if (!c.disabled && c.checked !== wanted) c.click(); } m.querySelector(".reviewer-run-submit").click()')
+            else:
+                script('const b = [...document.querySelectorAll("footer button")].find(b => b.textContent.includes("Analyze document")); b.click()')
             for _ in range(100):
                 status = script('return document.querySelector(".analysis-status")?.textContent || ""')
                 if 'findings' in status and 'cached reviews' in status: return status
@@ -247,7 +250,7 @@ try:
         assert invoke('save_document', {'path': 'grammar.md', 'content': grammar_source, 'expectedHash': None})['ok']
         restart_and_open('grammar')
         select_profile('grammar-profile')
-        status = analyze()
+        status = analyze('Harper')
         assert 'warnings' not in status, status
         assert script('const b = [...document.querySelectorAll(".finding-card")].find(b => b.textContent.includes("“has”")); if (!b) return false; b.click(); return true')
         assert script('const b = [...document.querySelectorAll(".fix-inspector button")].find(b => b.textContent.includes("Apply suggestion")); if (!b || b.disabled) return false; b.click(); return true')

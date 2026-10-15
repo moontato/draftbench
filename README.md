@@ -4,9 +4,11 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.5 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.6 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
-v0.2.5 improves active-request cancellation using streamed SSE transport for desktop inference, while still validating the complete answer before publishing findings. This includes native Rust changes and requires a rebuilt desktop app. Cancellation against a live llama-server router-mode instance remains unverified.
+v0.2.6 adds adaptive Revision mode with a retained read-only reference, explicit re-review, durable current-feedback snapshots, and exact Undo/Redo review restoration. Closing and resuming a reference preserves its original baseline, including across automatic local rechecks. Automatic Harper reviews now have a separate persistent toggle, off by default, without disabling explicit Harper runs.
+
+v0.2.5 added streamed SSE transport for request-specific desktop inference cancellation while still validating the complete answer before publishing findings.
 
 v0.2.4 adds per-run reviewer multi-selection: choose a checkbox-selected batch, scope, and optional cache bypass without changing your profiles. Choices persist during the session, and findings from unselected reviewers stay intact.
 
@@ -21,8 +23,9 @@ v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development re
 - Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings.
 - A small History button at the top of the Analysis pane shows the document's previous manual runs, reviewer/model provenance, scope, finding counts, cache reuse, and outcomes.
 - Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
+- **Revision mode**: pin a finding's passage and captured feedback as a read-only reference beside the live draft, with the reference pane becoming a resizable bottom dock in narrow or short windows.
 - **Clarity**, **Ambiguous reference**, **Redundancy**, **Structure**, and **Development** AI reviewers; a deterministic **Repeated word** check runs locally after a short debounce.
-- Analyze document (all enabled reviewers), or choose a checkbox-selected batch from **Run reviewers** at document, selection, or current-paragraph scope. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
+- Analyze document (enabled reviewers except manual-only Harper), or choose a checkbox-selected batch from **Run reviewers** at document, selection, or current-paragraph scope. Cancellation, per-analyzer errors, size limits, and stale-result rejection.
 - Configuration-driven custom AI reviewers: editable instructions, stable IDs, scope, severity and enablement, using the same exact-quote diagnostics and reviewed fixes as built-ins.
 - Named OpenAI-compatible backends with independent credentials/options, default backend/model inheritance, per-analyzer overrides, connection tests, and shared global/per-server concurrency limits.
 - Embedded offline **Harper** English grammar/style review; no API key, network, runtime management or downloads. Optional and disabled globally by default, including upgrades.
@@ -109,12 +112,20 @@ The plist should name an icon resource that exists in `Contents/Resources`. If i
 2. Create/open a document. `examples/nonfiction/` is a small sample project; its essay intentionally contains a repeated word and passages to review.
 3. Write normally using the prose toolbar. Save with **Ctrl+S / Cmd+S**.
 4. Configure your AI server in **Settings → AI**, or use the offline repeated-word check without AI.
-5. Choose **Analyze document** or **Analyze selection** to run all enabled reviewers. For a hand-picked batch, open **Run reviewers**, choose the scope, check the reviewers you want, then click **Run selected (N)**. **Select all / Clear** make it easy to choose a group or just one reviewer. **Force rerun (bypass cache)** applies only to that selected batch. Document-only reviewers are unavailable for selection/paragraph runs. Global disable switches apply to every reviewer; built-ins also respect profile membership. Checkbox choices are remembered during the app session, including across documents, and do not change your profiles or start analysis automatically.
+5. Choose **Analyze document** or **Analyze selection** to run enabled reviewers (manual-only Harper must be selected explicitly; see below). For a hand-picked batch, open **Run reviewers**, choose the scope, check the reviewers you want, then click **Run selected (N)**. **Select all / Clear** make it easy to choose a group or just one reviewer. **Force rerun (bypass cache)** applies only to that selected batch. Document-only reviewers are unavailable for selection/paragraph runs. Global disable switches apply to every reviewer; built-ins also respect profile membership. Checkbox choices are remembered during the app session, including across documents, and do not change your profiles or start analysis automatically.
 6. Click an underline or finding to inspect its passage and explanation. New AI findings carry exactly one resolution: a safe single-block replacement shown as a diff, concise revision guidance, or a focused question for the author. Older restored reviews may have only an explanation. Review the diff before **Apply suggestion**, or **Dismiss** it. The editor's Undo/Redo includes applied fixes.
 
 On startup, **Recent projects** shows up to five previously opened folders, most recent first, with names and paths. Click one to reopen the project directly; no folder picker or automatic opening is involved. Only successful folder opens update the list, and canonical paths avoid duplicate aliases. Missing/offline/inaccessible folders are checked only when clicked, report an error, and remain removable using the entry's × button. Removing a recent entry never deletes the folder or its documents. Your current project/editor remain intact if an attempted recent folder cannot be opened. The list starts filling as folders are opened in this version.
 
 The **Review finding** section can be collapsed using its heading chevron without dismissing or forgetting the selected finding. Expand it again, or click a finding card to inspect it. Drag the divider above the section to adjust its height; the focused divider also supports Up/Down and Home/End keys. The section shrinks automatically in shorter windows, leaving room for the finding cards. Height is retained while the pane stays open, including across collapse/expand.
+
+**Revision mode** keeps the feedback in view while you work on the passage. From the Review finding section, **Revise** pins the quoted passage and its captured feedback as a read-only **Revision reference** beside the live draft, alongside the document's surrounding context at capture time. In narrow or short windows the reference becomes a resizable bottom dock that collapses to its heading. The reference does not update as you type and never initiates AI requests automatically. An explicit **Re-review** bypasses the request cache and updates the pane with fresh feedback; when several findings are returned, a dropdown lets you choose between them. A clean result shows **No issues detected by the reviewer**, not confirmation that the concern is fixed. Harper and Repeated word re-review locally without an AI request. Its status distinguishes **Passage still matches**, **Review context changed**, **Edited since reference**, **Needs a fresh review**, **Reference only**, and **Dismissed**. **Apply suggestion** in the reference is disabled unless the passage and its captured context still match exactly, so an edited passage can never be "fixed" by a stale suggestion. **Jump to draft** follows the mapped passage position; when the mapped passage is lost, the reference never searches for another copy of the quote. An exact restoration of the captured review (such as Undo) can restore the original location. Ordinary editor clicks—including other findings' underlines—place the caret without replacing the reference or changing its review baseline. The document's profile, reviewer, and capture time are shown in the reference's provenance.
+
+Closing the reference or **Exit revision mode** restores the normal layout without discarding the capture. **Resume revision** returns to that same reference, even if its quote changed or its live finding disappeared; hidden references keep tracking edits. Reopening the corresponding finding also resumes the original capture, rather than adopting newer automatic local feedback. **Choose another finding** shows the analysis pane; selecting a different finding offers **New reference**, explicitly replacing the retained capture. Ambiguous, deleted or split passages are never guessed to be the same finding. Re-review remains the way to refresh captured feedback. Only one reference is retained for the current document session; switching documents or restarting clears the capture, independently of the saved feedback described below.
+
+Saving also retains the current mapped feedback for reopening, including **Previous review** findings, their original reviewer provenance, and their non-applicable status. Unaffected feedback stays applicable; saving or restarting does not turn old advice into a fresh review. A successful explicit review on an already saved, unchanged draft updates this feedback snapshot without requiring another Save. Partial re-review retains other reviewers' feedback, and reopening sends no automatic AI request. Feedback lost by older saves cannot be safely reconstructed; run a fresh review once before using this workflow.
+
+Editing does not clear all previous feedback. Still-intact quotes are tracked through editor transactions; findings whose analysis context changed remain visible as **Previous review**, with Apply disabled after manual edits until explicitly re-reviewed. Changed/deleted quotes are not rebound to other occurrences; a pinned reference still keeps their captured feedback visible. Unaffected findings remain applicable. Undo/Redo restores the review snapshot for the restored document state, including grouped typing and findings whose quotes were edited. Returning exactly to the reviewed state clears edit warnings; partial Undo keeps feedback stale. Current profile and reviewer settings are still checked, and restoring text does not send AI requests.
 
 Successful manual reviews save automatically. Reopening an unchanged document restores the saved findings without contacting the model, labeled **Saved review** with the last run's scope and timestamp. The document, writing profile, analyzer versions, and relevant effective analysis settings must match exactly; otherwise, no saved findings are restored. Older cache-only sidecars become eligible after the next successful review. Dismissals remain session-only.
 
@@ -122,9 +133,9 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.5**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.6**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
-Notifications automatically disappear after eight seconds; the close button remains available for earlier dismissal.
+Success notifications automatically disappear after eight seconds. Errors and warnings remain until dismissed, so save/review problems can be read in full; routine successes do not replace them. A warning that review results could not be saved for reopening refers to review metadata, not loss of the Markdown draft.
 
 Renames preserve document identity/profile. Deletion is permanent and confirmed; directories must be empty. There is no autosave in v0.1. Unsaved changes prompt on document/project changes and window close. Save checks for external changes; conflicts do not overwrite the other file. Reload explicitly or save a copy.
 
@@ -226,12 +237,12 @@ Effective configuration is resolved once and shared by requests, provenance, fre
 
 Profiles are analyzer presets, not hidden credential or model overrides:
 
-| Profile | Enabled by preset |
-| --- | --- |
-| General prose | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy, Structure, Development |
-| Technical writing | All seven built-in analyzers |
-| Essay | All seven built-in analyzers |
-| Professional email | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy |
+| Profile            | Enabled by preset                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| General prose      | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy, Structure, Development |
+| Technical writing  | All seven built-in analyzers                                                            |
+| Essay              | All seven built-in analyzers                                                            |
+| Professional email | Repeated word, Harper, Clarity, Ambiguous reference, Redundancy                         |
 
 Global disable switches apply on top of presets; **Harper is initially disabled globally**. Professional email excludes Structure and Development; the other built-in presets include them. **Settings → Profiles** creates, duplicates, renames, edits and deletes custom presets, with built-in/custom reviewer membership and a default-profile choice. Built-in profiles remain available and read-only. Documents persist their chosen profile ID. Removing a profile safely falls back to General prose without replacing document identity. Profiles never alter backend credentials or model choices. Development and Structure receive genre guidance from the built-in writing profiles (general prose, technical, essay); custom profiles make an explicit reviewer selection and add no genre claim, and the universal reviewers (Clarity, Ambiguous reference, Redundancy, custom reviewers) stay genre-neutral. Switching profiles preserves findings from reviewers that still apply and flags genre-specific findings for a rerun instead of clearing them. Findings retain their original review profile; returning to a compatible profile clears the flag. Disabled-reviewer findings remain visible until dismissed or replaced by a rerun after enabling the reviewer. Profile changes never initiate AI requests. Undo/Redo rechecks restored findings against the current profile, and incompatible findings are excluded from saved reviews.
 
@@ -257,7 +268,9 @@ The original **AI** tab is retained for the migrated Default backend. It is not 
 
 ### Offline Harper
 
-Enable **Harper** in Analyzers (or Analysis), with a profile that includes it. It runs after the local-check debounce and can also be run manually at document/paragraph/selection scope. The pinned Rust engine is compiled into the application and needs no connection. American-English curated grammar/style checks are used; spelling is left to native spellcheck and repetition to Repeated word. Fenced code blocks are excluded. Findings, alternative replacement choices, provenance, cache/restoration and reviewed fixes use the common pipeline; no suggestion is applied automatically.
+Enable **Harper** in Analyzers (or Analysis), with a profile that includes it. **Settings → Analysis → Automatically review with Harper** is a separate, persistent preference, **off by default**, including when older settings omit it. Leaving it off does not disable Harper: select it explicitly in **Run reviewers**, or choose Harper in the analysis pane's analyzer filter and run analysis. The revision pane's **Re-review** also works while automatic reviews are off. Unfiltered Analyze document/selection shortcuts omit manual-only Harper. Turning automatic reviews off keeps existing feedback; edits still make affected feedback non-applicable until reviewed again. Repeated word continues its local debounce, and AI remains manual.
+
+With automatic Harper enabled, local grammar/style reviews run after the debounce without AI requests. The pinned Rust engine is compiled into the application and needs no connection. American-English curated grammar/style checks are used; spelling is left to native spellcheck and repetition to Repeated word. Fenced code blocks are excluded. Findings, alternative replacement choices, provenance, cache/restoration and reviewed fixes use the common pipeline; no suggestion is applied automatically.
 
 Unicode scalar offsets from Harper are explicitly converted to editor UTF-16 offsets and exact-checked. Paragraph text is plain text; mark-level inline-code exclusion, dialect choices and user dictionaries remain follow-ups. A cancelled native grammar worker may finish in the background, but cannot publish stale results. Upstream Harper is Apache-2.0 licensed; its [license](src-tauri/resources/harper-LICENSE.txt) and [notice](src-tauri/resources/harper-NOTICE.txt) ship with desktop bundles.
 
@@ -286,7 +299,7 @@ my-project/
   notes.md
   .draftbench/
     project.json             Document IDs and profile presets
-    analysis.json            Bounded cache, saved reviews, and manual-run history
+    analysis.json            Bounded cache, saved reviews, current feedback, and run history
 ```
 
 Markdown is the source of truth. Project sidecars are optional and recoverable. File saves use a same-directory temporary file, flush, and atomic rename, retaining existing permissions where possible. A failed save keeps the dirty editor buffer. External changes are checked on save; no background filesystem watcher is implemented.
@@ -333,9 +346,9 @@ An analyzer receives an immutable snapshot, structured blocks, a planned scope/c
 
 Diagnostics carry analyzer/version, stable finding identity, category/severity, explanation, block/range reference, optional fix/confidence, revision/content/context fingerprints, and engine/server/model provenance. Code blocks are never diagnostic targets by default; references and document-level reviewers can include them as bounded context.
 
-**Block persistence is intentionally simple:** IDs are stable within an editing session, including ordinary edits and split/paste operations. Changed source/context invalidates findings immediately. Live results from old documents/configurations cannot attach to a new session. Reloads create fresh block IDs and clear active findings/dismissals; a validated saved review can then be restored only for the exact document bytes, editor serialization, structured content, profile, and relevant analyzer configurations. Stored block indices and application-validated quote offsets are resolved against the new session, and dependency fingerprints are rebuilt. A mismatch rejects the whole saved review—there is no fuzzy reattachment or replay of absolute editor ranges.
+**Block persistence is intentionally simple:** IDs are stable within an editing session, including ordinary edits and split/paste operations. Changed source/context invalidates findings immediately. Live results from old documents/configurations cannot attach to a new session. Reloads create fresh block IDs and clear session pins/dismissals. Saved feedback restores only for the exact saved document bytes, editor serialization, and structured content; reviewer/profile/configuration/input-budget compatibility is rechecked and incompatible findings remain non-applicable. Stored block indices and application-validated quote offsets are resolved against the new session, and dependency fingerprints are rebuilt. A document mismatch rejects the saved feedback snapshot with an explanation—there is no fuzzy reattachment or replay of absolute editor ranges. Original review fingerprints remain separate from current mapped locations. Exact-review records from older versions remain subject to their original profile/configuration/budget checks.
 
-One latest successful review per document is retained, bounded to 50 documents / approximately 500 KB, with up to 1,000 findings per review. Failed, canceled, partially malformed, or document-changed runs do not replace it. Reviews of unsaved text become reopenable only after saving that exact content. A normal save may normalize formatting while retaining the matching review. Clear analysis cache removes request-cache entries, saved reviews, and run history; all are disposable, not an archival history.
+One latest successful review per document is retained, bounded to 50 documents / approximately 500 KB, with up to 1,000 findings per review. Failed, canceled, partially malformed, or document-changed runs do not replace it. Reviews of unsaved text become reopenable only after saving that exact content. A normal save may normalize formatting while retaining the matching review. A separate current-feedback snapshot per saved document has the same 50-document / approximately 500 KB / 1,000-finding limits; it is not a claim that stale findings were reviewed again. Clear analysis cache removes request-cache entries, saved reviews, current feedback, and run history; all are disposable, not an archival history.
 
 On an explicit later run, request-cache hits still require identical structured target/context inputs and configuration; cached target indices are remapped to that exact request and quotes are resolved again.
 
@@ -349,7 +362,7 @@ The cache includes analyzer/prompt version, effective endpoint/model/options, cr
 2. Return `issues` with a block ID and exact quote. Deterministic analyzers may additionally supply a trusted `offset` for identical repeated quotes; AI offsets are never trusted.
 3. Register it in `src/analyzers/registry.ts`, add its default entry to `src/settings/model.ts` if desired, and include it in the appropriate profile presets.
 4. For a semantic reviewer, use the provider passed in its context and the shared `validateResult` / schema; do not call browser networking or implement your own settings inheritance.
-5. Add mocked behavior, mapping, scope, cache, and stale-result tests. No editor/Problems special cases are necessary. Registered deterministic analyzers automatically run after the local-check debounce.
+5. Add mocked behavior, mapping, scope, cache, and stale-result tests. No editor/Problems special cases are necessary. Registered deterministic analyzers run after the local-check debounce; Harper additionally requires the independent automatic-review preference.
 
 Example deterministic analyzer:
 
@@ -357,18 +370,27 @@ Example deterministic analyzer:
 import type { Analyzer } from './types'
 
 export const longParagraph: Analyzer = {
-  id: 'long-paragraph', version: '1', name: 'Long paragraph',
+  id: 'long-paragraph',
+  version: '1',
+  name: 'Long paragraph',
   description: 'An informational paragraph-length check, not a clarity judgment.',
-  engine: 'deterministic', preferredScope: 'paragraph',
+  engine: 'deterministic',
+  preferredScope: 'paragraph',
   scopes: ['selection', 'block', 'document'],
   async analyze({ unit }) {
     return {
       warnings: [],
-      issues: unit.targets.filter(b => b.text.split(/\s+/).length > 200).map(b => ({
-        block_id: b.id, quote: b.text, category: 'length', severity: 'info',
-        message: 'This paragraph has more than 200 words.',
-        explanation: 'Consider whether a paragraph break would help; length alone is not a problem.',
-      })),
+      issues: unit.targets
+        .filter((b) => b.text.split(/\s+/).length > 200)
+        .map((b) => ({
+          block_id: b.id,
+          quote: b.text,
+          category: 'length',
+          severity: 'info',
+          message: 'This paragraph has more than 200 words.',
+          explanation:
+            'Consider whether a paragraph break would help; length alone is not a problem.',
+        })),
     }
   },
 }

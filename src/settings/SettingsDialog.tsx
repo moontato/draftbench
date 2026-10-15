@@ -442,13 +442,15 @@ export function SettingsDialog({
                   AI findings; rerun analysis to reuse eligible cached results.
                 </p>
                 <AnalyzerManager draft={draft} onChange={setDraft} />
-                <button className="secondary-button" onClick={onClearCache}>
-                  Clear analysis cache
-                </button>
-                <p className="muted">
-                  Clears cached reviews, saved findings, and analysis history. Project analysis
-                  caches may contain excerpts from your writing.
-                </p>
+                <div className="analysis-cache-actions">
+                  <button className="secondary-button" onClick={onClearCache}>
+                    Clear analysis cache
+                  </button>
+                  <p className="muted">
+                    Clears cached reviews, saved findings, and analysis history. Project analysis
+                    caches may contain excerpts from your writing.
+                  </p>
+                </div>
               </>
             )}
             {tab === 'Analyzers' && <AnalyzerManager draft={draft} onChange={setDraft} />}

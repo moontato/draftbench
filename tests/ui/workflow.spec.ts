@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import packageMetadata from '../../package.json' with { type: 'json' }
+import { defaultSettings } from '../../src/settings/model'
 const appVersion = packageMetadata.version
 
 // Test-only native bridge. Nothing from this module is included in the app bundle.
@@ -12,6 +13,7 @@ interface FixtureSeed {
   recentLoadDelayMs?: number
   recentWriteFails?: boolean
   reviewAction?: 'replace' | 'guide' | 'question'
+  harperExplanation?: string
 }
 async function installDesktopFixture(
   page: import('@playwright/test').Page,
@@ -200,17 +202,19 @@ async function installDesktopFixture(
         }
         if (command === 'harper_review') {
           const text = String(args.text),
-            offset = text.indexOf('could of')
+            match = /could\s+of/.exec(text),
+            offset = match?.index ?? -1
           return offset < 0
             ? []
             : [
                 {
                   offset,
-                  quote: 'could of',
+                  quote: match![0],
                   category: 'harper-grammar',
                   severity: 'warning',
                   message: 'Use could have.',
-                  explanation: 'Could of is not the intended verb phrase.',
+                  explanation:
+                    seed.harperExplanation ?? 'Could of is not the intended verb phrase.',
                   replacement: 'could have',
                   replacements: ['could have', "could've"],
                   confidence: 1,
@@ -310,6 +314,44 @@ async function installDesktopFixture(
       },
     }
   }, seed)
+}
+
+async function fixtureCallCount(page: Page, command: string): Promise<number> {
+  return page.evaluate(
+    (command) =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+        (call) => call.command === command,
+      ).length,
+    command,
+  )
+}
+
+// Restart the renderer with only the native-owned files/settings/sidecars.
+// No editor state, block identities, request cache objects or React state survive.
+async function restartFixture(page: Page): Promise<Page> {
+  const seed = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        fixture: {
+          files: Record<string, string>
+          metadata: Record<string, unknown>
+          settings: unknown
+        }
+      }
+    ).fixture
+    return structuredClone({
+      files: fixture.files,
+      metadata: fixture.metadata,
+      settings: fixture.settings,
+    })
+  })
+  const restarted = await page.context().newPage()
+  await page.close()
+  await installDesktopFixture(restarted, seed)
+  await restarted.goto('/')
+  await restarted.getByRole('button', { name: 'Open a writing folder' }).click()
+  await restarted.getByRole('button', { name: 'essay', exact: true }).click()
+  return restarted
 }
 
 async function runReviewers(
@@ -531,7 +573,7 @@ test('expanded AI limits persist and notifications expire without manual dismiss
   await expect(page.locator('.notice')).toHaveCount(0)
 })
 
-test('reopening restores an exact saved review without inference; edits/config changes reject it', async ({
+test('reopening restores saved feedback without inference; external edits reject it and config changes block Apply', async ({
   page,
   context,
 }) => {
@@ -575,7 +617,7 @@ test('reopening restores an exact saved review without inference; edits/config c
     return reopened
   }
   const reopened = await openSaved(seed)
-  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved feedback')
   await expect(
     reopened.getByRole('button', { name: /Unclear referent hides the point/ }),
   ).toBeVisible()
@@ -606,15 +648,24 @@ test('reopening restores an exact saved review without inference; edits/config c
     ...seed,
     files: { ...seed.files, 'essay.md': seed.files['essay.md'] + '\nAn external edit.\n' },
   })
-  await expect(changed.locator('.analysis-status')).not.toContainText('Saved review')
+  await expect(changed.locator('.analysis-status')).toContainText('not restored')
   await expect(
     changed.getByRole('button', { name: /Unclear referent hides the point/ }),
   ).toHaveCount(0)
   const configured = await openSaved({ ...seed, settings: { ai: { model: 'another-model' } } })
-  await expect(configured.locator('.analysis-status')).not.toContainText('Saved review')
-  await expect(
-    configured.getByRole('button', { name: /Unclear referent hides the point/ }),
-  ).toHaveCount(0)
+  await expect(configured.locator('.analysis-status')).toContainText('includes previous reviews')
+  const previous = configured.getByRole('button', { name: /Unclear referent hides the point/ })
+  await expect(previous).toContainText('Reviewer settings changed · rerun')
+  await previous.click()
+  await expect(configured.getByRole('button', { name: 'Apply suggestion' })).toBeDisabled()
+  expect(
+    await configured.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (call) => call.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
   await reopened.close()
   await changed.close()
   await configured.close()
@@ -1390,7 +1441,7 @@ test('input budgets validate, persist across restart, allow long essays, and gat
   await reopened.goto('/')
   await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
   await reopened.getByRole('button', { name: 'essay', exact: true }).click()
-  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved feedback')
   await reopened.getByRole('button', { name: 'Open settings' }).click()
   await reopened.getByRole('button', { name: 'Analysis', exact: true }).click()
   await expect(reopened.getByLabel('Paragraph/context input budget (characters)')).toHaveValue(
@@ -1534,7 +1585,7 @@ for (const action of ['guide', 'question'] as const) {
     await reopened.goto('/')
     await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
     await reopened.getByRole('button', { name: 'essay', exact: true }).click()
-    await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+    await expect(reopened.locator('.analysis-status')).toContainText('Saved feedback')
     await reopened.getByRole('button', { name: /Unclear referent hides the point/ }).click()
     await expect(reopened.getByText(label, { exact: true })).toBeVisible()
     await expect(reopened.getByText(text, { exact: true })).toBeVisible()
@@ -1550,6 +1601,337 @@ for (const action of ['guide', 'question'] as const) {
     await reopened.close()
   })
 }
+
+test('revision mode pins a passage and feedback while editing; stale advice cannot be applied', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await runReviewers(page, ['Clarity'])
+  await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await expect(reference.getByRole('heading', { name: 'Revision reference' })).toBeVisible()
+  await expect(page.getByText('LIVE DRAFT', { exact: true })).toBeVisible()
+  await expect(reference.locator('.revision-quote')).toHaveText('This is unclear.')
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(reference.locator('.revision-actions button.primary-button')).toBeEnabled()
+  await expect(page.locator('.revision-resize')).toHaveCount(0)
+  // The pinned reference is read-only; the live draft keeps accepting edits.
+  await page.locator('.prose p', { hasText: 'This is unclear.' }).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' More.')
+  await expect(editor).toContainText('This is unclear. More.')
+  await expect(reference.locator('.revision-quote')).toHaveText('This is unclear.')
+  await expect(reference.locator('.revision-state')).toHaveText('Review context changed')
+  await expect(reference.locator('.revision-actions button.primary-button')).toBeDisabled()
+  // Exact Undo restores both the text and the original review snapshot.
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(editor).toContainText('This is unclear.')
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(reference.locator('.revision-actions button.primary-button')).toBeEnabled()
+  // Jump selects the mapped reference location in the live draft.
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await page.waitForSelector('.ProseMirror-focused')
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.type('X')
+  await expect(page.locator('.prose p', { hasText: 'XThis is unclear.' })).toBeVisible()
+  await page.getByRole('button', { name: 'Undo', exact: true }).click()
+  await expect(editor).toContainText('This is unclear.')
+  // A user-initiated rerun explicitly refreshes the captured advice.
+  await page.evaluate(() => {
+    ;(window as unknown as { fixture: { reviewDelayMs: number } }).fixture.reviewDelayMs = 250
+  })
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(reference.locator('.revision-run-status')).toContainText('findings')
+  await reference.getByRole('button', { name: 'Apply suggestion' }).click()
+  await expect(editor).toContainText('The proposal is unclear.')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await expect(reference.getByRole('button', { name: 'Re-review paragraph' })).toBeEnabled()
+  await expect(reference.getByRole('button', { name: 'Jump to draft' })).toBeDisabled()
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-run-status .spinner')).toBeVisible()
+  await expect(reference.locator('.revision-run-status .spinner')).toHaveCount(0)
+  await expect(reference.locator('.revision-state')).toHaveText('No issues detected')
+  await expect(reference.locator('.revision-message')).toHaveCount(0)
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toHaveCount(0)
+  // Exiting returns to the normal three-pane layout.
+  await page.getByRole('button', { name: 'Exit revision mode' }).click()
+  await expect(reference).toHaveCount(0)
+  await expect(page.locator('.documents-pane')).toBeVisible()
+  await expect(page.locator('.analysis-pane')).toBeVisible()
+})
+
+test('repeated underline clicks place the caret and exact keyboard Undo restores review state', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
+  const underline = page.locator(
+    '.editor-scroll [data-finding][title="Unclear referent hides the point."]',
+  )
+  const selectionText = () => page.evaluate(() => window.getSelection()?.toString())
+  const caretPlaced = () =>
+    page.evaluate(() => {
+      const selection = window.getSelection()
+      return (
+        !!selection?.isCollapsed && !!selection.anchorNode?.parentElement?.closest('.ProseMirror')
+      )
+    })
+  await underline.click()
+  await expect.poll(selectionText).toBe('This is unclear.')
+  for (const x of [8, 30, 65, 20]) {
+    await underline.click({ position: { x, y: 8 } })
+    await expect.poll(caretPlaced).toBe(true)
+  }
+  await page.keyboard.type('X')
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toContainText('X')
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(underline).toHaveText('This is unclear.')
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toBeVisible()
+  await underline.click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toBeFocused()
+  await page.keyboard.type('A different point.')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toBeDisabled()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toBeEnabled()
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toBeDisabled()
+})
+
+test('explicit re-review replaces captured feedback in place and displays a clean result', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
+  const initialRequests = await page.evaluate(
+    () =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+        (call) => call.command === 'ai_http',
+      ).length,
+  )
+  await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toBeFocused()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' More detail.')
+  await expect(reference.locator('.revision-passage')).not.toContainText('More detail.')
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toBeDisabled()
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-passage')).toContainText(
+    'This is unclear. More detail.',
+  )
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toBeEnabled()
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await expect(page.getByRole('textbox', { name: 'Document writing editor' })).toBeFocused()
+  await page.keyboard.type('The proposal is clear.')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-state')).toHaveText('No issues detected')
+  await expect(reference.locator('.revision-passage')).toContainText(
+    'The proposal is clear. More detail.',
+  )
+  await expect(reference.locator('.revision-message')).toHaveCount(0)
+  await expect(reference.getByRole('button', { name: 'Apply suggestion' })).toHaveCount(0)
+  await reference.getByRole('button', { name: 'Choose another finding' }).click()
+  await expect(page.getByRole('button', { name: /appears twice in a row/ })).toBeVisible()
+  const requests = await page.evaluate(
+    () =>
+      (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+        (call) => call.command === 'ai_http',
+      ).length,
+  )
+  expect(requests).toBe(initialRequests + 2)
+})
+
+test('edited feedback survives save/restart; clicks do not recapture it and a later re-review persists without another save', async ({
+  page,
+}) => {
+  const cardFor = (target: Page, reviewer: string) =>
+    target
+      .locator('.finding-group')
+      .filter({ has: target.getByRole('heading', { name: new RegExp(`^${reviewer}`) }) })
+      .getByRole('button', { name: /Unclear referent hides the point/ })
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await runReviewers(page, ['Clarity', 'Redundancy'])
+  await expect(cardFor(page, 'Redundancy')).toBeVisible()
+  await cardFor(page, 'Clarity').click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.locator('p').filter({ hasText: 'This is unclear.' }).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' Extra prose.')
+  await expect(reference.locator('.revision-state')).toHaveText('Review context changed')
+  for (let i = 0; i < 4; i++) {
+    await page.locator('.editor-scroll [data-finding]').first().click()
+    await page.locator('.editor-scroll [data-finding]').last().click()
+    await editor.locator('p').last().click()
+    await expect(reference.locator('.revision-quote')).toHaveText('This is unclear.')
+    await expect(reference.locator('.revision-state')).toHaveText('Review context changed')
+  }
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  const reopened = await restartFixture(page)
+  const card = cardFor(reopened, 'Clarity')
+  await expect(cardFor(reopened, 'Redundancy')).toBeVisible()
+  await expect(card).toBeVisible()
+  await card.click()
+  await expect(
+    reopened.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeDisabled()
+  await reopened.getByRole('button', { name: 'Revise', exact: true }).click()
+  const restoredReference = reopened.locator('.revision-pane')
+  await expect(restoredReference.locator('.revision-state')).toHaveText('Review context changed')
+  expect(
+    await reopened.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (call) => call.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+  await restoredReference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(restoredReference.locator('.revision-state')).toHaveText('Passage still matches')
+  await expect(restoredReference.getByRole('button', { name: 'Re-review paragraph' })).toBeEnabled()
+  // The saved draft did not change; no extra Save is required to retain a new review.
+  const reviewedRestart = await restartFixture(reopened)
+  await expect(cardFor(reviewedRestart, 'Clarity')).toBeVisible()
+  await cardFor(reviewedRestart, 'Clarity').click()
+  await expect(
+    reviewedRestart.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeEnabled()
+  // Re-reviewing Clarity must not discard another reviewer's previous feedback.
+  await cardFor(reviewedRestart, 'Redundancy').click()
+  await expect(
+    reviewedRestart.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeDisabled()
+  expect(
+    await reviewedRestart.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (call) => call.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+})
+
+test('unaffected AI feedback stays applicable after unrelated editing, saving and restarting', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    files: {
+      'essay.md':
+        'The the plan has merit.\n\nThis is unclear.\n\nNearby context.\n\nUnrelated final paragraph.\n',
+    },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
+  await expect(page.getByRole('button', { name: /Unclear referent hides the point/ })).toBeVisible()
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' More unrelated prose.')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  const reopened = await restartFixture(page)
+  await reopened.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await expect(
+    reopened.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeEnabled()
+  await reopened.getByRole('button', { name: 'Revise', exact: true }).click()
+  await expect(reopened.locator('.revision-state')).toHaveText('Passage still matches')
+  expect(
+    await reopened.evaluate(
+      () =>
+        (window as unknown as { fixture: { calls: { command: string }[] } }).fixture.calls.filter(
+          (call) => call.command === 'ai_http',
+        ).length,
+    ),
+  ).toBe(0)
+})
+
+test('revision mode changes its pin only explicitly and adapts to a narrow dock', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await runReviewers(page, ['Clarity'])
+  await page.getByRole('button', { name: /Unclear referent hides the point/ }).click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await expect(reference.locator('.revision-quote')).toHaveText('This is unclear.')
+  // Ordinary editor clicks never change the reference, even on unrelated feedback.
+  await page.locator('.editor-scroll [data-finding][title="“The” appears twice in a row."]').click()
+  await expect(reference.locator('.revision-quote')).toHaveText('This is unclear.')
+  await reference.getByRole('button', { name: 'Choose another finding' }).click()
+  await page.getByRole('button', { name: /“The” appears twice in a row/ }).click()
+  await page.getByRole('button', { name: 'New reference', exact: true }).click()
+  await expect(reference.locator('.revision-quote')).toHaveText('The the')
+  await expect(reference.locator('.revision-message')).toHaveText('“The” appears twice in a row.')
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  // A narrow window turns the side pane into a collapsible bottom dock.
+  await page.setViewportSize({ width: 1000, height: 700 })
+  await expect(page.locator('.workspace.revision-compact')).toBeVisible()
+  await expect(reference.locator('.revision-resize')).toBeVisible()
+  // The dock must fill the single-column workspace, not an overridden first column.
+  await expect
+    .poll(async () => {
+      const dock = await reference.boundingBox()
+      const workspace = await page.locator('.workspace').boundingBox()
+      return dock && workspace ? Math.abs(dock.width - workspace.width) : Infinity
+    })
+    .toBeLessThan(2)
+  const separator = reference.getByRole('separator')
+  await separator.focus()
+  await separator.press('End')
+  await expect(separator).toHaveAttribute(
+    'aria-valuenow',
+    (await separator.getAttribute('aria-valuemax')) ?? '',
+  )
+  await separator.press('Home')
+  await expect(separator).toHaveAttribute(
+    'aria-valuenow',
+    (await separator.getAttribute('aria-valuemin')) ?? '',
+  )
+  const toggle = reference.locator('.revision-toggle')
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(reference.locator('.revision-content')).toBeHidden()
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(reference.locator('.revision-content')).toBeVisible()
+  // Choosing another finding closes the reference and restores the analysis pane.
+  await reference.getByRole('button', { name: 'Choose another finding' }).click()
+  await expect(reference).toHaveCount(0)
+  await expect(page.locator('.analysis-pane')).toBeVisible()
+})
 
 test('profile switches and Undo keep old genre findings flagged until a fresh rerun', async ({
   page,
@@ -1656,7 +2038,7 @@ test('v0.2 creates a reviewer/profile, routes two backends with bounded overlap,
   await custom.getByLabel('Model override', { exact: true }).fill('gpu-custom-model')
   await page
     .getByRole('region', { name: 'Harper analyzer settings', exact: true })
-    .getByRole('checkbox')
+    .getByRole('checkbox', { name: /^Harper\b/ })
     .check()
   await page.getByRole('button', { name: 'Profiles', exact: true }).click()
   await page.getByRole('button', { name: 'Create custom profile' }).click()
@@ -1727,7 +2109,7 @@ test('v0.2 creates a reviewer/profile, routes two backends with bounded overlap,
   await reopened.getByRole('button', { name: 'Open a writing folder' }).click()
   await reopened.getByRole('button', { name: 'essay', exact: true }).click()
   await expect(reopened.getByLabel('Writing profile')).toHaveValue('work-email')
-  await expect(reopened.locator('.analysis-status')).toContainText('Saved review')
+  await expect(reopened.locator('.analysis-status')).toContainText('Saved feedback')
   await expect(
     reopened.getByRole('button', { name: /Unclear referent hides the point/ }),
   ).toHaveCount(3)
@@ -1750,6 +2132,212 @@ test('v0.2 creates a reviewer/profile, routes two backends with bounded overlap,
   await reopened.close()
 })
 
+test('Analysis groups automatic review under Harper and separates the cache action', async ({
+  page,
+}) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
+  await dialog.getByRole('button', { name: 'Analysis', exact: true }).click()
+  const harper = dialog.getByRole('region', { name: 'Harper analyzer settings', exact: true })
+  const automatic = harper.getByRole('checkbox', { name: 'Automatically review with Harper' })
+  await expect(automatic).not.toBeChecked()
+  await expect(
+    dialog.getByRole('checkbox', { name: 'Automatically review with Harper' }),
+  ).toHaveCount(1)
+  const cache = dialog.getByRole('button', { name: 'Clear analysis cache', exact: true })
+  await cache.scrollIntoViewIfNeeded()
+  const [managerBox, cacheBox] = await Promise.all([
+    dialog.locator('.analyzer-manager').boundingBox(),
+    cache.boundingBox(),
+  ])
+  expect(managerBox).not.toBeNull()
+  expect(cacheBox).not.toBeNull()
+  expect(cacheBox!.y - (managerBox!.y + managerBox!.height)).toBeGreaterThanOrEqual(24)
+  await automatic.check()
+  await expect(harper.getByRole('checkbox', { name: /^Harper\b/ })).not.toBeChecked()
+  await dialog.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await expect(automatic).toBeChecked()
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await fixtureCallCount(page, 'save_settings')).toBe(0)
+})
+
+test('automatic Harper defaults off, explicit selection works, and the independent preference persists across restart', async ({
+  page,
+}) => {
+  const settings = defaultSettings()
+  settings.analyzers.harper.enabled = true
+  await installDesktopFixture(page, {
+    settings,
+    files: { 'essay.md': 'The the draft. She could of finished the report.\n' },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(page.getByRole('button', { name: /“The” appears twice in a row/ })).toBeVisible()
+  expect(await fixtureCallCount(page, 'harper_review')).toBe(0)
+  await page.getByRole('button', { name: 'Analyze document', exact: true }).click()
+  await expect(page.locator('.analysis-status')).toContainText('cached reviews')
+  expect(await fixtureCallCount(page, 'harper_review')).toBe(0)
+  await page.getByLabel('Filter by analyzer').selectOption('harper')
+  await page
+    .locator('.analysis-empty')
+    .getByRole('button', { name: 'Analyze document', exact: true })
+    .click()
+  await expect(page.getByRole('button', { name: /Use could have/ })).toBeVisible()
+  await expect(page.locator('.analysis-status')).toContainText('cached reviews')
+  expect(await fixtureCallCount(page, 'harper_review')).toBe(1)
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  const toggle = page.getByRole('checkbox', { name: 'Automatically review with Harper' })
+  await expect(toggle).not.toBeChecked()
+  await toggle.check()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  const before = await fixtureCallCount(page, 'harper_review')
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' Extra prose.')
+  await expect.poll(() => fixtureCallCount(page, 'harper_review')).toBeGreaterThan(before)
+  await expect(page.getByRole('button', { name: /Use could have/ })).not.toContainText(
+    'Previous review',
+  )
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  const reopened = await restartFixture(page)
+  await expect(reopened.getByRole('button', { name: /Use could have/ })).toBeVisible()
+  await reopened.getByRole('button', { name: 'Open settings' }).click()
+  await reopened.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await expect(
+    reopened.getByRole('checkbox', { name: 'Automatically review with Harper' }),
+  ).toBeChecked()
+  await reopened.getByRole('checkbox', { name: 'Automatically review with Harper' }).uncheck()
+  await reopened.getByRole('button', { name: 'Save settings' }).click()
+  const offCalls = await fixtureCallCount(reopened, 'harper_review')
+  const repeated = reopened.locator(
+    '.editor-scroll [data-finding][title="“The” appears twice in a row."]',
+  )
+  await expect(repeated).toBeVisible()
+  const previousId = await repeated.getAttribute('data-finding')
+  await reopened.getByRole('textbox', { name: 'Document writing editor' }).click()
+  await reopened.keyboard.press('Control+End')
+  await reopened.keyboard.type(' Automatic Harper is off.')
+  await expect.poll(() => repeated.getAttribute('data-finding')).not.toBe(previousId)
+  expect(await fixtureCallCount(reopened, 'harper_review')).toBe(offCalls)
+  await expect(reopened.getByRole('button', { name: /Use could have/ })).toContainText(
+    'Previous review',
+  )
+  await runReviewers(reopened, ['Harper'], 'document', true)
+  await expect.poll(() => fixtureCallCount(reopened, 'harper_review')).toBe(offCalls + 1)
+  await expect(reopened.getByRole('button', { name: /Use could have/ })).not.toContainText(
+    'Previous review',
+  )
+  await reopened.getByRole('button', { name: /Use could have/ }).click()
+  await expect(
+    reopened.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeEnabled()
+})
+
+test('closing and reopening a regenerated Harper warning resumes its original reference until explicit Re-review', async ({
+  page,
+}) => {
+  const settings = defaultSettings()
+  settings.analyzers.harper.enabled = true
+  settings.analysis.autoHarper = true
+  await installDesktopFixture(page, {
+    settings,
+    files: { 'essay.md': 'She could of finished the report.\n\nUnrelated context.\n' },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: /Use could have/ }).click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await expect(page.locator('.ProseMirror-focused')).toBeVisible()
+  await page.keyboard.press('ArrowLeft')
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.type(' ')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await reference.getByRole('button', { name: 'Close revision reference' }).click()
+  await expect(reference).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Resume revision', exact: true })).toBeVisible()
+  // The automatic recheck returns a NEW finding over the changed quote.
+  const warning = page.getByRole('button', { name: /Use could have/ })
+  await expect(warning).toBeVisible()
+  await page.locator('.editor-scroll [data-finding][title="Use could have."]').click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  await expect(reference.locator('.revision-quote')).toHaveText('could of')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await expect(reference.getByRole('button', { name: 'Jump to draft' })).toBeDisabled()
+  await expect(
+    reference.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeDisabled()
+  await page.getByRole('button', { name: 'Exit revision mode', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Document writing editor' }).click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.type(' More context while the panel is closed.')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analysis', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Automatically review with Harper' }).uncheck()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page.getByRole('button', { name: 'Resume revision', exact: true }).click()
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  const manualCalls = await fixtureCallCount(page, 'harper_review')
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-state')).toHaveText('Passage still matches')
+  expect(await reference.locator('.revision-quote').textContent()).not.toBe('could of')
+  expect(await fixtureCallCount(page, 'harper_review')).toBe(manualCalls + 1)
+  await expect(
+    reference.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeEnabled()
+  expect(await fixtureCallCount(page, 'ai_http')).toBe(0)
+})
+
+test('Repeated word also resumes the old local reference and keeps it after its live finding disappears', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, { files: { 'essay.md': 'The the plan has merit.\n' } })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const warning = page.getByRole('button', { name: /“The” appears twice in a row/ })
+  await warning.click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await reference.getByRole('button', { name: 'Jump to draft' }).click()
+  await expect(page.locator('.ProseMirror-focused')).toBeVisible()
+  await page.keyboard.press('ArrowLeft')
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight')
+  await page.keyboard.type(' ')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await reference.getByRole('button', { name: 'Close revision reference' }).click()
+  await warning.click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  expect(await reference.locator('.revision-quote').textContent()).toBe('The the')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await expect(
+    reference.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toBeDisabled()
+  await page.getByRole('button', { name: 'Exit revision mode', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Document writing editor' }).click()
+  await page.keyboard.press('Control+Home')
+  await page.keyboard.press('Control+Delete')
+  await expect(warning).toHaveCount(0)
+  await page.getByRole('button', { name: 'Resume revision', exact: true }).click()
+  expect(await reference.locator('.revision-quote').textContent()).toBe('The the')
+  await expect(reference.locator('.revision-state')).toHaveText('Edited since reference')
+  await reference.getByRole('button', { name: 'Re-review paragraph' }).click()
+  await expect(reference.locator('.revision-state')).toHaveText('No issues detected')
+  await expect(
+    reference.getByRole('button', { name: 'Apply suggestion', exact: true }),
+  ).toHaveCount(0)
+  expect(await fixtureCallCount(page, 'ai_http')).toBe(0)
+})
+
 test('Harper findings share inline review, suggestion choice and normal Undo/Redo without AI or code linting', async ({
   page,
 }) => {
@@ -1758,6 +2346,7 @@ test('Harper findings share inline review, suggestion choice and normal Undo/Red
       'essay.md':
         'She **could of** finished the report.\n\n```text\nShe could of finished in code.\n```\n',
     },
+    harperExplanation: 'Use could have.',
   })
   await page.goto('/')
   await page.getByRole('button', { name: 'Open a writing folder' }).click()
@@ -1766,14 +2355,20 @@ test('Harper findings share inline review, suggestion choice and normal Undo/Red
   await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
   await page
     .getByRole('region', { name: 'Harper analyzer settings', exact: true })
-    .getByRole('checkbox')
+    .getByRole('checkbox', { name: /^Harper\b/ })
     .check()
   await page.getByRole('button', { name: 'Save settings' }).click()
+  await runReviewers(page, ['Harper'])
   await expect(page.getByRole('button', { name: /Use could have/ })).toHaveCount(1)
   await expect(page.locator('.diagnostic')).toHaveCount(1)
   await page.getByRole('button', { name: /Use could have/ }).click()
   await page.getByLabel('Suggested replacement').selectOption('1')
-  await page.getByRole('button', { name: 'Apply suggestion', exact: true }).click()
+  await page.getByRole('button', { name: 'Revise', exact: true }).click()
+  const reference = page.locator('.revision-pane')
+  await expect(reference.locator('.revision-message')).toHaveText('Use could have.')
+  await expect(reference.locator('.revision-explanation')).toHaveCount(0)
+  await expect(reference.getByLabel('Suggested replacement')).toHaveValue('1')
+  await reference.getByRole('button', { name: 'Apply suggestion', exact: true }).click()
   await expect(page.locator('.tiptap strong')).toContainText("could've")
   await expect(page.locator('.tiptap pre')).toContainText('could of')
   await page.getByRole('button', { name: 'Undo', exact: true }).click()

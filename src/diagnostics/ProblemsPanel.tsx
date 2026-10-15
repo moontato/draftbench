@@ -13,8 +13,10 @@ import {
 import type { Diagnostic, Severity } from './types'
 import type { Analyzer } from '../analyzers/types'
 import { useReviewResize } from './useReviewResize'
+import { hasDistinctExplanation } from './feedbackText'
 interface Props {
   findings: Diagnostic[]
+  hidden?: boolean
   selected: string | null
   dismissed: Set<string>
   analyzers: Analyzer[]
@@ -23,6 +25,8 @@ interface Props {
   hasDocument: boolean
   canApply: boolean
   onSelect: (finding: Diagnostic) => void
+  onRevise?: (finding: Diagnostic) => void
+  reviseAsNew?: boolean
   onApply: (finding: Diagnostic) => void
   onDismiss: (id: string) => void
   onResetDismissed: () => void
@@ -89,7 +93,7 @@ export function ProblemsPanel(props: Props) {
     ? { ...original, replacement: original.replacements[alternative] ?? original.replacements[0] }
     : original
   return (
-    <aside className="analysis-pane" aria-label="Document analysis">
+    <aside className="analysis-pane" aria-label="Document analysis" hidden={props.hidden}>
       <div className="pane-heading">
         <div>
           <span className="eyebrow">REVIEW YOUR WRITING</span>
@@ -185,7 +189,7 @@ export function ProblemsPanel(props: Props) {
               <button
                 className="text-button"
                 disabled={!props.hasDocument || props.busy}
-                onClick={() => props.onRun()}
+                onClick={() => props.onRun(filter === 'all' ? undefined : filter)}
               >
                 Analyze document <ArrowUpRight size={14} />
               </button>
@@ -213,7 +217,11 @@ export function ProblemsPanel(props: Props) {
                     {f.engine.kind === 'ai' && <span className="ai-tag">AI</span>}
                   </span>
                   {f.contextChanged && (
-                    <span className="finding-link">Context changed · review carefully</span>
+                    <span className="finding-link">
+                      {f.stale
+                        ? 'Previous review · re-review before applying'
+                        : 'Context changed · review carefully'}
+                    </span>
                   )}
                   {f.needsRerun && (
                     <span className="finding-link">
@@ -260,20 +268,35 @@ export function ProblemsPanel(props: Props) {
                   finding
                 </button>
               </h3>
-              <button
-                className="text-button"
-                onClick={() => props.onSelect(chosen)}
-                title="Jump to source"
-              >
-                Jump <ArrowUpRight size={13} />
-              </button>
+              <div className="inspector-heading-actions">
+                {props.onRevise && (
+                  <button
+                    className="text-button"
+                    disabled={!props.canApply}
+                    onClick={() => props.onRevise?.(chosen)}
+                    title={
+                      props.reviseAsNew
+                        ? 'Replace the retained reference with a new capture of this finding'
+                        : 'Open the captured passage and feedback without resetting an existing reference'
+                    }
+                  >
+                    {props.reviseAsNew ? 'New reference' : 'Revise'}
+                  </button>
+                )}
+                <button
+                  className="text-button"
+                  onClick={() => props.onSelect(chosen)}
+                  title="Jump to source"
+                >
+                  Jump <ArrowUpRight size={13} />
+                </button>
+              </div>
             </div>
             <div className="inspector-body" id={reviewId} hidden={collapsed}>
               {chosen.contextChanged && (
                 <p role="note">
-                  Another suggestion changed the analysis context. The quoted text is unchanged, but
-                  check that this suggestion still makes sense before applying it. Rerun analysis
-                  for a fresh review.
+                  The analysis context changed. The quoted text is unchanged, but this is
+                  previous-review feedback. Re-review for advice on the current draft.
                 </p>
               )}
               {chosen.needsRerun && (
@@ -288,7 +311,9 @@ export function ProblemsPanel(props: Props) {
                   )}
                 </p>
               )}
-              <p>{chosen.explanation}</p>
+              {hasDistinctExplanation(chosen.message, chosen.explanation) && (
+                <p>{chosen.explanation}</p>
+              )}
               {chosen.replacements && chosen.replacements.length > 1 && (
                 <label className="field">
                   Suggested replacement
@@ -384,7 +409,12 @@ export function ProblemsPanel(props: Props) {
                 {chosen.replacement !== undefined && (
                   <button
                     className="primary-button"
-                    disabled={!props.canApply}
+                    disabled={!props.canApply || !!chosen.stale || !!chosen.needsRerun}
+                    title={
+                      chosen.stale || chosen.needsRerun
+                        ? 'Re-review this passage with compatible reviewer settings before applying'
+                        : undefined
+                    }
                     onClick={() => props.onApply(chosen)}
                   >
                     <Check size={14} />

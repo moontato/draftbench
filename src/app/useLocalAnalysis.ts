@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import type { Snapshot, Diagnostic } from '../diagnostics/types'
 import type { Analyzer } from '../analyzers/types'
 import type { AIProvider } from '../ai/types'
@@ -32,8 +32,18 @@ export function useLocalAnalysis({
   showNotice,
 }: LocalAnalysisContext) {
   const enabled = (id: string) => analyzerEnabled(settings, id, profile)
+  // Invalidate publication as soon as new props render, even before effect cleanup.
+  const activation = useRef({ current, settings, profile, analyzers })
+  if (
+    activation.current.current !== current ||
+    activation.current.settings !== settings ||
+    activation.current.profile !== profile ||
+    activation.current.analyzers !== analyzers
+  )
+    activation.current = { current, settings, profile, analyzers }
   // Automatic local rule checks only; never semantic AI calls.
   useEffect(() => {
+    const generation = activation.current
     const localAnalyzers = analyzers.filter((a) => a.engine === 'deterministic')
     setFindings((old) =>
       old.filter(
@@ -44,8 +54,21 @@ export function useLocalAnalysis({
     const controller = new AbortController()
     const timeout = setTimeout(() => {
       const input = { ...current, selection: undefined }
+      const isCurrent = () => {
+        const live = currentRef.current
+        return (
+          !controller.signal.aborted &&
+          activation.current === generation &&
+          !!live &&
+          live.documentId === input.documentId &&
+          live.hash === input.hash
+        )
+      }
       void (async () => {
-        for (const analyzer of localAnalyzers.filter((a) => enabled(a.id))) {
+        for (const analyzer of localAnalyzers.filter(
+          (a) => enabled(a.id) && (a.id !== 'harper' || settings.analysis.autoHarper),
+        )) {
+          if (!isCurrent()) return
           try {
             const result = await runAnalyzer(
               analyzer,
@@ -56,7 +79,7 @@ export function useLocalAnalysis({
               controller.signal,
               cache.current,
             )
-            if (controller.signal.aborted || !currentRef.current) return
+            if (!isCurrent()) return
             if (result.warnings.length) showNotice(result.warnings.slice(0, 3).join(' '), true)
             setFindings((old) => [
               ...old.filter((f) => f.analyzerId !== analyzer.id),
@@ -66,8 +89,7 @@ export function useLocalAnalysis({
               }),
             ])
           } catch (error) {
-            if (!controller.signal.aborted)
-              showNotice(`${analyzer.name}: ${errorMessage(error)}`, true)
+            if (isCurrent()) showNotice(`${analyzer.name}: ${errorMessage(error)}`, true)
           }
         }
       })()

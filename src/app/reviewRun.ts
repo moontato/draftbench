@@ -32,6 +32,7 @@ export interface ReviewRunContext {
   provider: RefObject<AIProvider>
   persistRef: RefObject<() => Promise<void>>
   persistAnalysis: () => Promise<void>
+  captureFeedback?: (input: Snapshot, diskHash: string, serializedHash: string) => boolean
   busy: boolean
   settingsLoaded: boolean
   profile: ProfileId
@@ -97,6 +98,7 @@ export function createReviewRun(context: ReviewRunContext) {
     const targets = analyzers.filter(
       (a) =>
         (!requested || requested.has(a.id)) &&
+        (a.id !== 'harper' || settingsRef.current.analysis.autoHarper || requested?.has(a.id)) &&
         (enabled(a.id) ||
           (a.origin === 'custom' &&
             requested?.has(a.id) &&
@@ -109,7 +111,9 @@ export function createReviewRun(context: ReviewRunContext) {
       showNotice(
         requested
           ? 'No selected reviewers are enabled for this scope. Check the selection, profile, and Analysis settings.'
-          : 'No enabled analyzers support this scope. Check the profile and Analysis settings.',
+          : !settingsRef.current.analysis.autoHarper && enabled('harper')
+            ? 'Select Harper explicitly in Run reviewers or the analyzer filter to run it while automatic Harper reviews are off.'
+            : 'No enabled analyzers support this scope. Check the profile and Analysis settings.',
         true,
       )
       return
@@ -119,6 +123,7 @@ export function createReviewRun(context: ReviewRunContext) {
     const serializedHash = hash(writeMarkdown(active.source, editor.getMarkdown()))
     const markdownHash = dirtyRef.current ? serializedHash : active.diskHash
     let reviewedFindings = [...findings]
+    let staleRun = false
     const controller = new AbortController()
     let historyId = ''
     try {
@@ -196,6 +201,7 @@ export function createReviewRun(context: ReviewRunContext) {
           !currentRef.current ||
           configurationHash(effectiveConfig(settingsRef.current, analyzer.id)) !== configHash
         ) {
+          staleRun = true
           if (!controller.signal.aborted)
             recordHistory(analyzer.id, {
               status: 'stale',
@@ -203,6 +209,18 @@ export function createReviewRun(context: ReviewRunContext) {
               requests: result.requests,
               discarded: result.findings.length,
             })
+          return
+        }
+        // An empty answer about an older draft must not erase mapped feedback
+        // about text edited while the request was in flight.
+        if (input.hash !== currentRef.current.hash && !result.findings.length) {
+          staleRun = true
+          recordHistory(analyzer.id, {
+            status: 'stale',
+            findings: 0,
+            cacheHits: result.cacheHits,
+            requests: result.requests,
+          })
           return
         }
         const fresh = result.findings.flatMap((f) => {
@@ -222,6 +240,10 @@ export function createReviewRun(context: ReviewRunContext) {
           discarded: result.findings.length - fresh.length,
         })
         discarded += result.findings.length - fresh.length
+        if (input.hash !== currentRef.current.hash && !fresh.length) {
+          staleRun = true
+          return
+        }
         count += fresh.length
         hits += result.cacheHits
         const targetIds = new Set(
@@ -260,12 +282,18 @@ export function createReviewRun(context: ReviewRunContext) {
         : `${count} findings · ${hits} cached reviews${discarded ? ` · ${discarded} stale results discarded` : ''}${errors.length ? ' · completed with warnings' : ''}`,
     )
     if (errors.length) showNotice(errors.join(' '), true)
+    else if (staleRun && !controller.signal.aborted)
+      showNotice(
+        'The draft or reviewer settings changed during analysis. Previous feedback was kept; re-review the current draft.',
+        true,
+      )
     else if (!controller.signal.aborted)
       showNotice('Analysis complete. Review each suggestion before applying it.')
     if (
       !controller.signal.aborted &&
       !errors.length &&
       !discarded &&
+      !staleRun &&
       sessionRef.current?.token === active.token &&
       currentRef.current?.hash === input.hash &&
       serializedHash === hash(writeMarkdown(active.source, editor.getMarkdown()))
@@ -273,7 +301,7 @@ export function createReviewRun(context: ReviewRunContext) {
       // Previous-context findings stay visible but cannot be saved as current.
       // SavedReviews also independently verifies each finding's policy fingerprint.
       const valid = reviewedFindings.flatMap((f) => {
-        if (f.needsRerun) return []
+        if (f.needsRerun || f.contextChanged || f.stale) return []
         const refreshed = refreshDiagnostic(f, currentRef.current!)
         return refreshed ? [refreshed] : []
       })
@@ -289,12 +317,40 @@ export function createReviewRun(context: ReviewRunContext) {
           scope,
         )
       )
-        showNotice('Analysis complete, but a reopenable saved review could not be recorded.', true)
+        showNotice(
+          'Review completed, but its results could not be saved for reopening this document. Your Markdown is unaffected.',
+          true,
+        )
+    }
+    // Undo can return to the exact saved bytes while the dirty flag remains set.
+    // A new review of those bytes still belongs to the saved feedback frame.
+    if (
+      !controller.signal.aborted &&
+      (!dirtyRef.current || serializedHash === sessionRef.current?.diskHash) &&
+      sessionRef.current?.token === active.token &&
+      currentRef.current?.hash === input.hash &&
+      serializedHash === hash(writeMarkdown(active.source, editor.getMarkdown()))
+    ) {
+      if (
+        context.captureFeedback &&
+        !context.captureFeedback(currentRef.current!, sessionRef.current.diskHash, serializedHash)
+      )
+        showNotice(
+          'Review completed, but the visible feedback could not be saved for reopening. Your Markdown is unaffected.',
+          true,
+        )
     }
     try {
       await persistAnalysis()
     } catch {
-      showNotice('Analysis complete, but the local review/cache could not be saved.', true)
+      showNotice(
+        'Review completed, but its results could not be saved locally. Your Markdown is unaffected.',
+        true,
+      )
     }
+    if (!controller.signal.aborted && !errors.length && !discarded && !staleRun)
+      return reviewedFindings.filter((finding) =>
+        targets.some((analyzer) => analyzer.id === finding.analyzerId),
+      )
   }
 }

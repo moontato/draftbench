@@ -121,6 +121,7 @@ export class SavedReviews {
       if (
         !fresh ||
         finding.contextChanged ||
+        finding.stale ||
         finding.needsRerun ||
         !reviewContextMatches(
           finding,
@@ -269,6 +270,8 @@ export class SavedReviews {
         saved.reviewContext,
       )
       if (!finding || !refreshDiagnostic(finding, input)) return null
+      if (analyzer.engine === 'ai')
+        finding.reviewInputBudgets = { ...(record.inputBudgets ?? DEFAULT_INPUT_BUDGETS) }
       findings.push(finding)
     }
     return {

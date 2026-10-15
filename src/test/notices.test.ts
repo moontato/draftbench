@@ -24,18 +24,22 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
-describe('transient notifications', () => {
-  it.each([false, true])(
-    'automatically hides notifications after eight seconds (error=%s)',
-    (error) => {
-      act(() => state.showNotice('Saved or failed.', error))
-      expect(state.notice).toEqual({ message: 'Saved or failed.', error })
-      act(() => vi.advanceTimersByTime(NOTICE_DURATION_MS - 1))
-      expect(state.notice).not.toBeNull()
-      act(() => vi.advanceTimersByTime(1))
-      expect(state.notice).toBeNull()
-    },
-  )
+describe('notification lifetime', () => {
+  it('automatically hides success notifications after eight seconds', () => {
+    act(() => state.showNotice('Saved.'))
+    act(() => vi.advanceTimersByTime(NOTICE_DURATION_MS - 1))
+    expect(state.notice).not.toBeNull()
+    act(() => vi.advanceTimersByTime(1))
+    expect(state.notice).toBeNull()
+  })
+  it('keeps warnings readable until dismissed, even if a success follows', () => {
+    act(() => state.showNotice('Review results could not be saved.', true))
+    act(() => vi.advanceTimersByTime(NOTICE_DURATION_MS * 10))
+    act(() => state.showNotice('Analysis complete.'))
+    expect(state.notice?.message).toBe('Review results could not be saved.')
+    act(() => state.dismissNotice())
+    expect(state.notice).toBeNull()
+  })
   it('restarts the timer for identical messages and never lets an old timer dismiss a newer notice', () => {
     act(() => state.showNotice('Saved.'))
     act(() => vi.advanceTimersByTime(7000))

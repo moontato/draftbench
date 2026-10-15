@@ -147,6 +147,7 @@ export async function runAnalyzer(
           reviewContextFor(analyzer, profile),
         )
         if (finding) {
+          if (analyzer.engine === 'ai') finding.reviewInputBudgets = { ...budgets }
           findings.push(finding)
           validIssues.push(issue)
         } else

@@ -54,6 +54,39 @@ describe('custom reviewer ID migration', () => {
   })
 })
 
+describe('automatic Harper preference', () => {
+  it('defaults fresh and older settings to manual Harper without disabling the reviewer', () => {
+    for (const raw of [
+      {},
+      { version: 1 },
+      { version: 2 },
+      { version: 2, analysis: { parallelJobs: 2 } },
+    ])
+      expect(settingsSchema.parse(raw).analysis.autoHarper).toBe(false)
+    const enabled = defaultSettings()
+    enabled.analyzers.harper.enabled = true
+    enabled.analysis.autoHarper = true
+    expect(loadSettings(JSON.parse(JSON.stringify(enabled))).settings.analysis.autoHarper).toBe(
+      true,
+    )
+    enabled.analysis.autoHarper = false
+    const restored = loadSettings(JSON.parse(JSON.stringify(enabled))).settings
+    expect(restored.analysis.autoHarper).toBe(false)
+    expect(restored.analyzers.harper.enabled).toBe(true)
+  })
+  it('repairs invalid automatic mode independently and rejects invalid saves', () => {
+    const raw = {
+      ...defaultSettings(),
+      analysis: { ...defaultSettings().analysis, autoHarper: 'false' },
+    }
+    expect(settingsSchema.safeParse(raw).success).toBe(false)
+    const loaded = loadSettings(raw)
+    expect(loaded.settings.analysis.autoHarper).toBe(false)
+    expect(loaded.warnings.join(' ')).toContain('analysis.autoHarper')
+    expect(loaded.settings.analysis.paragraphInputChars).toBe(12000)
+  })
+})
+
 describe('AI settings limits', () => {
   it('defaults old settings to sequential jobs and validates the concurrency cap', () => {
     expect(settingsSchema.parse({ version: 1 }).analysis.parallelJobs).toBe(1)

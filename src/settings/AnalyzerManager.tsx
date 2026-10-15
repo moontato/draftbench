@@ -237,6 +237,29 @@ export function AnalyzerManager({ draft, onChange }: Props) {
                 ? 'paragraph + context'
                 : analyzer.preferredScope}
             </small>
+            {analyzer.id === 'harper' && (
+              <div className="analyzer-auto-review">
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={draft.analysis.autoHarper}
+                    onChange={(e) =>
+                      onChange({
+                        ...draft,
+                        analysis: { ...draft.analysis, autoHarper: e.target.checked },
+                      })
+                    }
+                  />
+                  Automatically review with Harper
+                </label>
+                <p>
+                  Off by default. Requires Harper to be enabled in your writing profile. When off,
+                  select Harper explicitly in Run reviewers (or the analyzer filter) to run it
+                  manually. Its Re-review button still works, and existing feedback stays visible.
+                  Repeated word continues checking locally; AI never runs automatically.
+                </p>
+              </div>
+            )}
             {analyzer.engine === 'ai' && (
               <>
                 <label className="field small-field">

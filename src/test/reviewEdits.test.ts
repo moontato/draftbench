@@ -2,6 +2,7 @@ import { afterEach, expect, it } from 'vitest'
 import { Editor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
+import { closeHistory, undoDepth } from '@tiptap/pm/history'
 import { BlockIdentity, ensureBlockIds, snapshot } from '../editor/blocks'
 import { applyFix } from '../editor/diagnostics'
 import { ReviewEditHistory } from '../editor/reviewEdits'
@@ -135,10 +136,55 @@ it('does not restore applied suggestions just because manual typing recreates th
   )
   expect(state.findings().some((f) => f.id === original.id)).toBe(false)
 })
+it('restores removed quotes and review flags when grouped manual typing is undone', () => {
+  const state = review()
+  const first = state.findings()[0]
+  editor.commands.insertContentAt({ from: first.from, to: first.to }, 'New one.')
+  editor.commands.insertContentAt(first.from + 'New one.'.length, ' More.')
+  expect(undoDepth(editor.state)).toBe(1)
+  expect(state.findings()).toHaveLength(3)
+  expect(state.findings().every((finding) => finding.stale)).toBe(true)
+  editor.commands.undo()
+  expect(state.findings()).toHaveLength(4)
+  expect(state.findings().every((finding) => !finding.stale && !finding.contextChanged)).toBe(true)
+  editor.commands.redo()
+  expect(state.findings()).toHaveLength(3)
+  expect(state.findings().every((finding) => finding.stale)).toBe(true)
+})
+it('keeps feedback stale during partial Undo and clears it only at the reviewed state', () => {
+  const state = review()
+  const reviewedHash = state.current().hash
+  editor.commands.insertContentAt(state.current().blocks[0].to, ' Extra.')
+  editor.view.dispatch(closeHistory(editor.state.tr).setMeta('addToHistory', false))
+  editor.commands.insertContentAt(state.current().blocks[1].to, ' More.')
+  expect(undoDepth(editor.state)).toBe(2)
+  editor.commands.undo()
+  expect(state.current().hash).not.toBe(reviewedHash)
+  expect(state.findings().every((finding) => finding.stale && finding.contextChanged)).toBe(true)
+  editor.commands.undo()
+  expect(state.current().hash).toBe(reviewedHash)
+  expect(state.findings().every((finding) => !finding.stale && !finding.contextChanged)).toBe(true)
+  editor.commands.redo()
+  expect(state.findings().every((finding) => finding.stale)).toBe(true)
+})
 it('still rejects stale fixes after an ordinary manual edit', () => {
   const state = review()
   const stale = state.findings()[0]
   editor.commands.insertContentAt(stale.from, 'Changed ')
-  expect(state.findings()).toHaveLength(0)
+  expect(state.findings()).toHaveLength(4)
+  expect(state.findings().every((finding) => finding.stale && finding.contextChanged)).toBe(true)
   expect(state.apply(stale)).toBe(false)
+  expect(state.apply(state.findings()[0])).toBe(false)
+})
+it('drops only a manually changed quote and retains other feedback as non-applicable references', () => {
+  const state = review()
+  const first = state.findings()[0]
+  editor.commands.insertContentAt({ from: first.from, to: first.to }, 'New wording.')
+  expect(state.findings()).toHaveLength(3)
+  expect(state.findings().some((finding) => finding.id === first.id)).toBe(false)
+  for (const finding of state.findings()) {
+    expect(finding.stale).toBe(true)
+    expect(refreshDiagnostic(finding, state.current())).not.toBeNull()
+    expect(state.apply(finding)).toBe(false)
+  }
 })

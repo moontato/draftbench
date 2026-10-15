@@ -8,51 +8,50 @@ import { snapshot } from './blocks'
 import type { Diagnostic } from '../diagnostics/types'
 export const appliedSuggestionMeta = 'draftbench.appliedSuggestion'
 const key = new PluginKey<DecorationSet>('writingDiagnostics')
-export const DiagnosticDecorations = Extension.create<{ onSelect: (id: string) => void }>({
-  name: 'writingDiagnostics',
-  addOptions() {
-    return { onSelect: () => {} }
-  },
-  addProseMirrorPlugins() {
-    const onSelect = this.options.onSelect
-    return [
-      new Plugin({
-        key,
-        state: {
-          init: () => DecorationSet.empty,
-          apply(tr, old) {
-            const findings = tr.getMeta(key) as Diagnostic[] | undefined
-            if (findings)
-              return DecorationSet.create(
-                tr.doc,
-                findings.map((f) =>
-                  Decoration.inline(f.from, f.to, {
-                    class: `diagnostic diagnostic-${f.severity}`,
-                    'data-finding': f.id,
-                    title: f.message,
-                  }),
-                ),
-              )
-            // Remove on edits immediately; the app revalidates and reinstates untouched findings.
-            return tr.docChanged ? DecorationSet.empty : old.map(tr.mapping, tr.doc)
+export const DiagnosticDecorations = Extension.create<{ onSelect: (id: string) => boolean | void }>(
+  {
+    name: 'writingDiagnostics',
+    addOptions() {
+      return { onSelect: () => {} }
+    },
+    addProseMirrorPlugins() {
+      const onSelect = this.options.onSelect
+      return [
+        new Plugin({
+          key,
+          state: {
+            init: () => DecorationSet.empty,
+            apply(tr, old) {
+              const findings = tr.getMeta(key) as Diagnostic[] | undefined
+              if (findings)
+                return DecorationSet.create(
+                  tr.doc,
+                  findings.map((f) =>
+                    Decoration.inline(f.from, f.to, {
+                      class: `diagnostic diagnostic-${f.severity}`,
+                      'data-finding': f.id,
+                      title: f.message,
+                    }),
+                  ),
+                )
+              // Remove on edits immediately; the app revalidates and reinstates untouched findings.
+              return tr.docChanged ? DecorationSet.empty : old.map(tr.mapping, tr.doc)
+            },
           },
-        },
-        props: {
-          decorations: (state) => key.getState(state),
-          handleClick(_view, _pos, event) {
-            const element = (event.target as HTMLElement)?.closest('[data-finding]')
-            const id = element?.getAttribute('data-finding')
-            if (id) {
-              onSelect(id)
-              return true
-            }
-            return false
+          props: {
+            decorations: (state) => key.getState(state),
+            handleClick(_view, _pos, event) {
+              const element = (event.target as HTMLElement)?.closest('[data-finding]')
+              const id = element?.getAttribute('data-finding')
+              if (id) return onSelect(id) !== false
+              return false
+            },
           },
-        },
-      }),
-    ]
+        }),
+      ]
+    },
   },
-})
+)
 export function decorate(editor: Editor, findings: Diagnostic[]) {
   editor.view.dispatch(editor.state.tr.setMeta(key, findings).setMeta('addToHistory', false))
 }
@@ -70,7 +69,13 @@ export function applyFix(
   documentId: string,
   revision: number,
 ): boolean {
-  if (finding.replacement === undefined || !editor.isEditable) return false
+  if (
+    finding.replacement === undefined ||
+    !editor.isEditable ||
+    finding.stale ||
+    finding.needsRerun
+  )
+    return false
   const fresh = refreshDiagnostic(finding, snapshot(editor, documentId, revision))
   if (!fresh) return false
   const tr = editor.state.tr

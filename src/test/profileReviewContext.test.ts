@@ -218,10 +218,13 @@ describe('review context continuity', () => {
     legacy.import(data)
     expect(state.restore(legacy)).toBeNull()
   })
-  it('ordinary edits still invalidate findings instead of rebasing stale context', async () => {
+  it('ordinary edits preserve intact quotes as stale without clearing profile incompatibility', async () => {
     const state = await review()
     state.changeProfile('technical')
     state.editor.commands.insertContentAt(state.findings()[0].from, 'Changed ')
-    expect(state.findings()).toHaveLength(0)
+    expect(state.findings()).toHaveLength(2)
+    expect(
+      state.findings().every((finding) => finding.stale && finding.needsRerun === 'genre'),
+    ).toBe(true)
   })
 })

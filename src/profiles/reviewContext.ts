@@ -2,7 +2,12 @@ import type { Analyzer } from '../analyzers/types'
 import type { Diagnostic, ReviewContext, Snapshot } from '../diagnostics/types'
 import { refreshDiagnostic } from '../diagnostics/mapping'
 import { hash } from '../diagnostics/hash'
-import { configurationHash, effectiveConfig, type Settings } from '../settings/model'
+import {
+  configurationHash,
+  effectiveConfig,
+  sameInputBudgets,
+  type Settings,
+} from '../settings/model'
 import { analyzerEnabled, globallyEnabled } from './profiles'
 
 // Genre policy is inference input, not merely a profile label. Hash the actual
@@ -63,7 +68,9 @@ export function reconcileReviewContexts(
     if (
       analyzer.version !== fresh.analyzerVersion ||
       (analyzer.engine === 'ai' &&
-        fresh.configurationHash !== configurationHash(effectiveConfig(settings, analyzer.id)))
+        (fresh.configurationHash !== configurationHash(effectiveConfig(settings, analyzer.id)) ||
+          (fresh.reviewInputBudgets &&
+            !sameInputBudgets(fresh.reviewInputBudgets, settings.analysis))))
     )
       return [{ ...rest, needsRerun: 'reviewer' as const }]
     if (!reviewContextMatches(fresh, analyzer, profile))

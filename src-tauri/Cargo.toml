@@ -1,6 +1,6 @@
 [package]
 name = "draftbench"
-version = "0.2.5"
+version = "0.2.6"
 description = "Static analysis for writing"
 authors = ["Draftbench contributors"]
 license = "MIT"

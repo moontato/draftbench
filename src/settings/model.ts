@@ -110,10 +110,16 @@ const schemaV2 = z
       .object({
         parallelJobs: z.number().int().min(1).max(MAX_PARALLEL_JOBS).default(1),
         legacySingleModel: z.boolean().default(true),
+        autoHarper: z.boolean().default(false),
         paragraphInputChars: inputBudget.default(DEFAULT_INPUT_BUDGETS.paragraphInputChars),
         documentInputChars: inputBudget.default(DEFAULT_INPUT_BUDGETS.documentInputChars),
       })
-      .default({ parallelJobs: 1, legacySingleModel: true, ...DEFAULT_INPUT_BUDGETS }),
+      .default({
+        parallelJobs: 1,
+        legacySingleModel: true,
+        autoHarper: false,
+        ...DEFAULT_INPUT_BUDGETS,
+      }),
     analyzers: z
       .record(stableId, analyzerConfig)
       .default(defaults)

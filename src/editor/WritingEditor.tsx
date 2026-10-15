@@ -25,7 +25,7 @@ interface Props {
   settings: Settings['editor']
   onReady: (editor: Editor) => void
   onChange: (editor: Editor, transaction: Transaction) => void
-  onFinding: (id: string) => void
+  onFinding: (id: string) => boolean | void
   askLink: () => Promise<string | null>
 }
 export function WritingEditor({

@@ -31,6 +31,8 @@ import { Modal } from '../ui/Modal'
 import { useWorkspaceSession } from './useWorkspaceSession'
 import { backendConfig } from '../settings/model'
 import { ReviewerRunMenu } from './ReviewerRunMenu'
+import { RevisionPane } from '../diagnostics/RevisionPane'
+import { useRevisionLayout } from '../diagnostics/useRevisionLayout'
 function FileTree({
   entries,
   selected,
@@ -110,6 +112,19 @@ export function WorkspaceView({
     findings,
     selected,
     dismissed,
+    reference,
+    referenceView,
+    referenceScope,
+    canReviewReference,
+    beginRevision,
+    canResumeRevision,
+    reviseAsNew,
+    resumeRevision,
+    closeRevision,
+    chooseRevisionFinding,
+    jumpRevision,
+    acceptRevision,
+    rereviewRevision,
     leftOpen,
     rightOpen,
     settingsTab,
@@ -130,6 +145,7 @@ export function WorkspaceView({
     settingsRef,
     cache,
     savedReviews,
+    feedbackSnapshots,
     task,
     fileTask,
     askName,
@@ -170,6 +186,7 @@ export function WorkspaceView({
     setEntryActions,
     setHistoryRevision,
   } = workspace
+  const revisionLayout = useRevisionLayout()
   const defaultAI = backendConfig(settings, settings.defaultBackend)
   return (
     <div
@@ -204,10 +221,15 @@ export function WorkspaceView({
         </div>
       </header>
       <div
-        className={`workspace ${leftOpen ? '' : 'left-hidden'} ${rightOpen ? '' : 'right-hidden'}`}
+        ref={revisionLayout.areaRef}
+        className={
+          reference
+            ? `workspace revision-workspace ${revisionLayout.compact ? 'revision-compact' : ''}`
+            : `workspace ${leftOpen ? '' : 'left-hidden'} ${rightOpen ? '' : 'right-hidden'}`
+        }
       >
         {leftOpen && (
-          <aside className="documents-pane" aria-label="Project documents">
+          <aside className="documents-pane" aria-label="Project documents" hidden={!!reference}>
             <div className="pane-heading">
               <h2>Workspace</h2>
               <button
@@ -282,7 +304,7 @@ export function WorkspaceView({
         <main className={`writing-pane ${!session ? 'welcome-pane' : ''}`}>
           <div className="document-bar">
             <div className="document-breadcrumb">
-              {!leftOpen && (
+              {!leftOpen && !reference && (
                 <button
                   className="icon-button"
                   aria-label="Show documents"
@@ -292,29 +314,48 @@ export function WorkspaceView({
                 </button>
               )}
               <FileText size={15} />
+              {reference && <strong className="revision-live-label">LIVE DRAFT</strong>}
               <span>{session?.path ?? 'Your next draft'}</span>
               {dirty && <Circle size={7} fill="currentColor" />}
             </div>
             <div className="document-bar-actions">
-              <button
-                className="icon-button"
-                aria-label="Toggle focus mode"
-                title="Focus mode"
-                onClick={() => {
-                  const hide = leftOpen || rightOpen
-                  setLeftOpen(!hide)
-                  setRightOpen(!hide)
-                }}
-              >
-                <Maximize2 size={15} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label={rightOpen ? 'Hide analysis' : 'Show analysis'}
-                onClick={() => setRightOpen(!rightOpen)}
-              >
-                <PanelRightClose size={17} />
-              </button>
+              {canResumeRevision && (
+                <button
+                  className="text-button"
+                  onClick={resumeRevision}
+                  disabled={saving || fileBusy || !!session?.source.unsupported.length}
+                  title="Return to the captured reference without starting a new review"
+                >
+                  Resume revision
+                </button>
+              )}
+              {reference ? (
+                <button className="text-button" onClick={closeRevision}>
+                  Exit revision mode
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="icon-button"
+                    aria-label="Toggle focus mode"
+                    title="Focus mode"
+                    onClick={() => {
+                      const hide = leftOpen || rightOpen
+                      setLeftOpen(!hide)
+                      setRightOpen(!hide)
+                    }}
+                  >
+                    <Maximize2 size={15} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label={rightOpen ? 'Hide analysis' : 'Show analysis'}
+                    onClick={() => setRightOpen(!rightOpen)}
+                  >
+                    <PanelRightClose size={17} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
           {session ? (
@@ -480,6 +521,7 @@ export function WorkspaceView({
         </main>
         {rightOpen && (
           <ProblemsPanel
+            hidden={!!reference}
             findings={findings}
             selected={selected}
             dismissed={dismissed}
@@ -489,6 +531,8 @@ export function WorkspaceView({
             hasDocument={!!session}
             canApply={!!session && !saving && !fileBusy && !session.source.unsupported.length}
             onSelect={selectFinding}
+            onRevise={beginRevision}
+            reviseAsNew={reviseAsNew}
             onApply={accept}
             onDismiss={(id) => {
               setDismissed((old) => new Set([...old, id]))
@@ -507,6 +551,36 @@ export function WorkspaceView({
             }
             onSettings={() => setSettingsTab('Analysis')}
             onHistory={() => setHistoryOpen(true)}
+          />
+        )}
+        {reference && referenceView && (
+          <RevisionPane
+            key={`${reference.sessionToken}:${reference.finding.id}:${reference.capturedAt}`}
+            reference={reference}
+            view={referenceView}
+            layout={revisionLayout}
+            canApply={!!session && !saving && !fileBusy && !session.source.unsupported.length}
+            canReview={canReviewReference}
+            busy={busy}
+            status={status}
+            scope={referenceScope}
+            onClose={closeRevision}
+            onChoose={() => {
+              chooseRevisionFinding()
+              requestAnimationFrame(() => {
+                document
+                  .querySelector<HTMLElement>('.analysis-pane .finding-card, .analysis-pane select')
+                  ?.focus()
+              })
+            }}
+            onJump={jumpRevision}
+            onApply={acceptRevision}
+            onDismiss={() => {
+              setDismissed((old) => new Set([...old, reference.finding.id]))
+              setSelected(null)
+            }}
+            onReview={() => task(rereviewRevision)}
+            onSelectFinding={beginRevision}
           />
         )}
       </div>
@@ -588,6 +662,7 @@ export function WorkspaceView({
             running.current?.abort()
             cache.current.clear()
             savedReviews.current.clear()
+            feedbackSnapshots.current.clear()
             setStatus('')
             setFindings([])
             const next = {
@@ -610,6 +685,7 @@ export function WorkspaceView({
             running.current?.abort()
             cache.current.clear()
             savedReviews.current.clear()
+            feedbackSnapshots.current.clear()
             history.current.clear()
             setHistoryRevision((old) => old + 1)
             setStatus('')
