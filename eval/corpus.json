@@ -126,5 +126,181 @@
     "analyzer": "development",
     "expectedBehavior": "In technical writing, flag the undefined prerequisite (the drift value from an absent step 2) as a reader-facing problem, without rewriting the whole procedure.",
     "expectedQuote": "drift value from step 2"
+  },
+  {
+    "id": "clarity-nominalization-burden",
+    "profile": "technical",
+    "analyzer": "clarity",
+    "source": "The categorization of the nonconformances was performed by the review committee prior to the initiation of the remediation planning.",
+    "expectedBehavior": "Flag the stacked nominalizations that hide who does what. Explain the specific reading problem instead of replacing the whole sentence.",
+    "expectedQuote": "initiation of the remediation planning"
+  },
+  {
+    "id": "clarity-unstated-action",
+    "profile": "email",
+    "analyzer": "clarity",
+    "source": "Regarding the attached contract, there is an issue with the section about termination that we may want to look at possibly.",
+    "expectedBehavior": "The reader cannot tell what is being asked or by when. Ask for the missing decision or action rather than drafting a new email.",
+    "expectedQuote": "may want to look at possibly"
+  },
+  {
+    "id": "clarity-clean-procedure",
+    "profile": "technical",
+    "analyzer": "clarity",
+    "source": "Open the collector settings and set the sampling interval to 250 milliseconds.\n\nSave the change and restart the collector.\n\nThe next log entry confirms the new interval.",
+    "expectedBehavior": "A short ordered procedure with explicit actions and a verification step is already clear.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "reference-pronoun-chain",
+    "profile": "general",
+    "analyzer": "ambiguous-reference",
+    "source": "Marco told Daniel that his proposal was approved, but he was not sure whether the budget committee had seen it yet.",
+    "expectedBehavior": "At least one pronoun has two plausible people as its antecedent. Name the person instead of guessing.",
+    "expectedQuote": "his proposal was approved"
+  },
+  {
+    "id": "reference-signature-owner",
+    "profile": "email",
+    "analyzer": "ambiguous-reference",
+    "source": "Priya asked Lena to resend the contract because her signature page was missing.",
+    "expectedBehavior": "It is unclear whose signature page is missing. Prefer a focused question or guidance naming the ambiguity.",
+    "expectedQuote": "her signature page was missing"
+  },
+  {
+    "id": "reference-two-systems-clean",
+    "profile": "technical",
+    "analyzer": "ambiguous-reference",
+    "source": "The collector and the log service both write to the same directory.\n\nThe collector retries for thirty seconds; the log service does not.",
+    "expectedBehavior": "Each sentence names its own system, so the reference is unambiguous.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "redundancy-restated-result",
+    "profile": "essay",
+    "analyzer": "redundancy",
+    "source": "Only 12 percent of participants completed the follow-up survey.\n\nThe follow-up survey was completed by only 12 percent of the participants.\n\nThis limits how far the result can be generalized.",
+    "expectedBehavior": "Flag the second paragraph as a restatement of the first result. The distinct limitation in the third paragraph is not redundant.",
+    "expectedQuote": "was completed by only 12 percent"
+  },
+  {
+    "id": "redundancy-double-caveat",
+    "profile": "essay",
+    "analyzer": "redundancy",
+    "source": "The sample was small, so the result should be treated as preliminary.\n\nBecause the sample was small, the finding is preliminary and should not be overinterpreted.",
+    "expectedBehavior": "Two consecutive paragraphs carry the same caveat. Report the duplication; do not merge the author's paragraphs automatically.",
+    "expectedQuote": "the finding is preliminary"
+  },
+  {
+    "id": "redundancy-clean-instructions",
+    "profile": "email",
+    "analyzer": "redundancy",
+    "source": "Please review the attached agenda before Monday.\n\nIf you want to add an item, send it to me by Sunday evening.\n\nThe final agenda will be distributed on Monday morning.",
+    "expectedBehavior": "Each paragraph adds a distinct step or deadline, so shared vocabulary is not redundancy.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "structure-unfulfilled-steps",
+    "profile": "technical",
+    "analyzer": "structure",
+    "source": "This section explains how to install the collector, configure its filters, and verify the log output.\n\nDownload the installer and run it with default options.\n\nThe collector then starts automatically at every boot.",
+    "expectedBehavior": "The opening promises filter configuration and log verification that the section never delivers. Report the gap; do not write the missing steps.",
+    "expectedQuote": "configure its filters, and verify the log output"
+  },
+  {
+    "id": "structure-unlisted-factor",
+    "profile": "essay",
+    "analyzer": "structure",
+    "source": "Three factors shaped the decision.\n\nThe first factor was cost.\n\nThe second factor was the timeline.",
+    "expectedBehavior": "The announced structure is incomplete. Flag the missing third factor as a structural gap rather than inventing it.",
+    "expectedQuote": "Three factors shaped the decision"
+  },
+  {
+    "id": "structure-clean-progression",
+    "profile": "general",
+    "analyzer": "structure",
+    "source": "I started with a failed prototype.\n\nThe second prototype fixed the sensor mount but introduced a wiring fault.\n\nThe third version passed all three bench tests, which is why the design was approved.",
+    "expectedBehavior": "A three-step narrative that delivers what its opening sets up needs no restructuring.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "structure-long-unfulfilled-essay",
+    "profile": "essay",
+    "analyzer": "structure",
+    "source": "This essay evaluates the relocation proposal on cost, staff continuity, and access to public transport.\n\nThe relocation would cost $180,000 in the first year, against $120,000 for staying put.\n\nLease terms are fixed for seven years, so the cost comparison assumes no renegotiation before then.\n\nTwo of the four team leads said they would not move to the suburban site.\n\nThe new building has parking for forty cars and a bus stop two blocks away.\n\nOverall, the proposal looks attractive on financial grounds and should be approved.",
+    "expectedBehavior": "Across the whole document, staff continuity is raised but never evaluated, and the conclusion claims more than the paragraphs support. Report the cross-paragraph gap without reorganizing or rewriting the essay.",
+    "expectedQuote": "cost, staff continuity, and access to public transport"
+  },
+  {
+    "id": "development-unsupported-qualities",
+    "profile": "essay",
+    "analyzer": "development",
+    "source": "I am a natural leader with excellent communication skills and strong technical ability. These qualities make me an ideal fit for the role.",
+    "expectedBehavior": "Flag the unsupported self-assessment as a development opportunity, with guidance or a question that invites the author's own evidence. Never invent examples or praise.",
+    "expectedQuote": "natural leader with excellent communication skills"
+  },
+  {
+    "id": "development-unsupported-comparison",
+    "profile": "technical",
+    "analyzer": "development",
+    "source": "The new routine is significantly faster and more reliable than the previous one.",
+    "expectedBehavior": "A comparative claim with no measurement is underdeveloped. Ask for the numbers the author actually observed instead of supplying them.",
+    "expectedQuote": "significantly faster and more reliable"
+  },
+  {
+    "id": "development-clean-reflection",
+    "profile": "essay",
+    "analyzer": "development",
+    "source": "My first prototype failed because I soldered the sensor directly to the board. Re-reading the bench log showed the joint had cracked under vibration, so the second prototype used a strain relief loop and passed all three tests.",
+    "expectedBehavior": "Specific cause, evidence and outcome are already developed; adding generic advice would be noise.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "development-long-procedure-gap",
+    "profile": "technical",
+    "analyzer": "development",
+    "source": "Calibrate the sensor before the first run.\n\nConnect the collector, start the log service, and open the calibration panel.\n\nSet the threshold to the drift value recorded during calibration and confirm that the panel shows the new value.\n\nRun the collector for ten minutes and export the log.\n\nIf anomalies appear, repeat the calibration with a lower threshold.",
+    "expectedBehavior": "In technical writing, flag the missing prerequisite detail (what the recorded drift value is and where it is stored) as a reader-facing gap without rewriting the whole procedure.",
+    "expectedQuote": "the drift value recorded during calibration"
+  },
+  {
+    "id": "custom-vague-characterization",
+    "profile": "general",
+    "analyzer": "eval-reviewer",
+    "source": "Honestly, this whole thing is a total mess and nobody really knows what to do about it.",
+    "expectedBehavior": "The custom reviewer reports only what its own instructions define. It should flag the vague, unsupported characterization without rewriting the paragraph in its own voice.",
+    "expectedQuote": "a total mess"
+  },
+  {
+    "id": "custom-clean-factual",
+    "profile": "general",
+    "analyzer": "eval-reviewer",
+    "source": "The bench test recorded 14 successful cycles and one failed cycle at 60 degrees Celsius.",
+    "expectedBehavior": "A concrete factual statement with numbers is not a finding for this reviewer.",
+    "expectNoFindings": true
+  },
+  {
+    "id": "custom-long-document",
+    "profile": "general",
+    "analyzer": "eval-reviewer",
+    "source": "The migration was difficult and everyone agreed it went badly.\n\nThe first two attempts failed because the export tool could not handle files larger than 2 GB.\n\nThe third attempt split the archive into 1 GB parts and completed in 40 minutes.\n\nThe team's overall impression was that the new process is much better, although no measurements were recorded.",
+    "expectedBehavior": "Across multiple paragraphs, flag the unsupported overall judgement while leaving the specific, evidenced paragraphs alone.",
+    "expectedQuote": "the new process is much better"
+  },
+  {
+    "id": "structure-long-audit-gap",
+    "profile": "essay",
+    "analyzer": "structure",
+    "source": "This report evaluates the proposed archive consolidation on retrieval speed, storage cost, and audit traceability.\n\nThe current setup keeps three regional copies, each indexed separately, and a request is answered by whichever regional index resolves first.\n\nConsolidation would replace the three indexes with one global index and keep the regional copies as cold storage.\n\nRetrieval is the clearest benefit: a cross-region query today has to query all three indexes and merge the results, which adds an average of 900 milliseconds.\n\nStorage cost is where the proposal is weakest. The cold copies still count against the quarterly storage budget, so consolidation saves indexing cost but not the dominant storage line item.\n\nThe finance review estimated a 6 percent reduction in indexing spend and no change in total storage spend.\n\nAudit traceability is discussed only in one sentence: the proposal states that a single index would make audits simpler.\n\nNo audit workflow is described, no retention rule is compared between the regional and global index, and the report never says who signs off on audit readiness.\n\nThe recommendation is to consolidate in the next planning cycle because the retrieval improvement is meaningful and the risk is described as low.",
+    "expectedBehavior": "Across a long document, flag the promised audit-traceability evaluation that is never delivered, and the conclusion's unsupported risk claim. Report the gap only; do not reorganize or rewrite the report.",
+    "expectedQuote": "retrieval speed, storage cost, and audit traceability"
+  },
+  {
+    "id": "redundancy-long-benchmark-restatement",
+    "profile": "technical",
+    "analyzer": "redundancy",
+    "source": "The migration team measured a 40 percent reduction in export time after switching to the streaming exporter.\n\nThe streaming exporter reduced export time by 40 percent, which the team took as confirmation that the old exporter was the bottleneck.\n\nThe first benchmark ran on a 12 GB archive; the second ran on a 14 GB archive after the streaming exporter was enabled.\n\nBecause the two benchmarks used different archive sizes, the 40 percent figure was recalculated against the same archive and reported again as a 40 percent improvement.\n\nThe team also noted that the streaming exporter writes to the same temporary directory as the old exporter.\n\nThat shared temporary directory is a real operational risk, and it is the only new risk the report identifies.",
+    "expectedBehavior": "Flag the restated benchmark result and the recalculated duplicate of the same 40 percent figure. The distinct operational risk in the final paragraph must not be reported as redundant.",
+    "expectedQuote": "reduced export time by 40 percent"
   }
 ]

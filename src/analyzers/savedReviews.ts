@@ -40,6 +40,11 @@ const findingSchema = z.object({
     .max(5000),
   documentScope: z.boolean(),
   nearby: z.boolean(),
+  /** Inline-code fingerprint for format-sensitive reviewers; absent for every other reviewer. */
+  formatHash: z
+    .string()
+    .regex(/^([a-f0-9]{64})?$/)
+    .optional(),
   reviewContext: z.object({ profile: z.string().min(1).max(64), policyHash: digest }).optional(),
 })
 const reviewSchema = z.object({
@@ -166,6 +171,9 @@ export class SavedReviews {
         dependencies,
         documentScope: !!finding.dependencies.$document,
         nearby: !!finding.dependencies[`$neighbors:${finding.blockId}`],
+        formatHash: this.analyzers.find((a) => a.id === finding.analyzerId)?.formatSensitive
+          ? (fresh.formatHash ?? input.blocks[blockIndex]?.formatHash ?? '')
+          : undefined,
         reviewContext: finding.reviewContext,
       })
     }
@@ -234,7 +242,9 @@ export class SavedReviews {
         saved.issue.block_id !== String(saved.blockIndex) ||
         (analyzer.profileAware &&
           saved.reviewContext?.policyHash !== reviewContextFor(analyzer, profile).policyHash) ||
-        block.text.slice(saved.start, saved.start + saved.issue.quote.length) !== saved.issue.quote
+        block.text.slice(saved.start, saved.start + saved.issue.quote.length) !==
+          saved.issue.quote ||
+        (saved.formatHash !== undefined && (block.formatHash ?? '') !== saved.formatHash)
       )
         return null
       const dependencies: Record<string, string> = {}
@@ -270,6 +280,8 @@ export class SavedReviews {
         saved.reviewContext,
       )
       if (!finding || !refreshDiagnostic(finding, input)) return null
+      if (saved.formatHash !== undefined) finding.formatHash = saved.formatHash
+      else if (analyzer.formatSensitive) finding.formatHash = block.formatHash ?? ''
       if (analyzer.engine === 'ai')
         finding.reviewInputBudgets = { ...(record.inputBudgets ?? DEFAULT_INPUT_BUDGETS) }
       findings.push(finding)

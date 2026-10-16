@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { open, confirm } from '@tauri-apps/plugin-dialog'
+import type { RecoveryRecord } from '../documents/recovery'
 import type { Settings } from '../settings/model'
 import { parseRecentProjects, type RecentProject } from './recentProjects'
 export interface FileEntry {
@@ -48,6 +49,10 @@ export const storage = {
   setKey: (key: string, credentialRef?: string) =>
     invoke<void>('set_api_key', { key, credentialRef }),
   hasKey: (credentialRef?: string) => invoke<boolean>('has_api_key', { credentialRef }),
+  /** Unsaved-draft checkpoints live in app storage, never in the author's project. */
+  recoveryLoad: () => invoke<{ version: number; records: RecoveryRecord[] }>('load_recovery'),
+  recoveryWrite: (record: RecoveryRecord) => invoke<void>('write_recovery', { record }),
+  recoveryClear: (key?: string) => invoke<void>('clear_recovery', { key: key ?? null }),
 }
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message

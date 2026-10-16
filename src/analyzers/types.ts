@@ -32,6 +32,9 @@ export interface Analyzer {
   instructions?: string
   /** The writing profile's genre guidance is part of this reviewer's prompt and cache identity. */
   profileAware?: boolean
+  /** This reviewer analyses plain prose only: inline-code spans are masked out, and the block's
+   *  inline-code fingerprint becomes part of the finding's validity and cache identity. */
+  formatSensitive?: boolean
   scopes: Scope[]
   analyze(context: AnalyzerContext): Promise<AnalyzerResult>
 }

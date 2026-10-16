@@ -1,0 +1,230 @@
+[
+  {
+    "caseId": "clarity-indirect",
+    "verdict": "expected",
+    "note": "Two clean readings exist; a finding must name the opacity, not rewrite the sentence.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-clean-short",
+    "verdict": "expected",
+    "note": "Instruction, actor and deadline are explicit. Any finding here is a false positive.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-clean-long",
+    "verdict": "expected",
+    "note": "Causal chain is stated. Length must not be treated as a clarity problem.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-two-antecedents",
+    "verdict": "expected",
+    "note": "Exactly one antecedent question is in scope: who missed the deadline.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-neighbor-clean",
+    "verdict": "expected",
+    "note": "'This policy' resolves against the previous paragraph.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-explicit-name-clean",
+    "verdict": "expected",
+    "note": "Names are repeated deliberately; no ambiguity to report.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-unnecessary-restatement",
+    "verdict": "expected",
+    "note": "Paragraph 2 restates paragraph 1. Paragraph 3 adds a new limitation.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-distinct-results-clean",
+    "verdict": "expected",
+    "note": "Shared vocabulary with different results is not redundancy.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-useful-reminder-clean",
+    "verdict": "expected",
+    "note": "The closing reminder carries its own reason.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-unfulfilled-promise",
+    "verdict": "expected",
+    "note": "The opening promises three criteria; only cost is delivered.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-clean-comparison",
+    "verdict": "expected",
+    "note": "Promise, evidence and recommendation all line up.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-clean-email",
+    "verdict": "expected",
+    "note": "Action, context and next step are present; no template needed.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-cross-paragraph-transition-clean",
+    "verdict": "expected",
+    "note": "'That was until' resolves against paragraph 1.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-generic-claims",
+    "verdict": "expected",
+    "note": "A finding must ask for the author's evidence, never supply examples.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-supported-claim-clean",
+    "verdict": "expected",
+    "note": "Concrete numbers and an observed result are already developed.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-technical-prerequisite",
+    "verdict": "expected",
+    "note": "'step 2' is undefined in this document.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-nominalization-burden",
+    "verdict": "expected",
+    "note": "Stacked nominalizations hide the actor; the quote is the worst cluster.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-unstated-action",
+    "verdict": "expected",
+    "note": "No decision or deadline is stated; the finding must ask, not draft.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "clarity-clean-procedure",
+    "verdict": "expected",
+    "note": "Ordered steps with a verification step are already clear.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-pronoun-chain",
+    "verdict": "expected",
+    "note": "'his' and 'he' can point at either man.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-signature-owner",
+    "verdict": "expected",
+    "note": "'her' can be Priya or Lena.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "reference-two-systems-clean",
+    "verdict": "expected",
+    "note": "Each sentence names its own system.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-restated-result",
+    "verdict": "expected",
+    "note": "Passive restatement of the same figure; the generalization limit is new.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-double-caveat",
+    "verdict": "expected",
+    "note": "Same caveat twice in a row; merging is the author's choice, not the reviewer's.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-clean-instructions",
+    "verdict": "expected",
+    "note": "Three distinct steps/deadlines.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-unfulfilled-steps",
+    "verdict": "expected",
+    "note": "Two of three promised steps are missing.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-unlisted-factor",
+    "verdict": "expected",
+    "note": "Announced three, delivered two.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-clean-progression",
+    "verdict": "expected",
+    "note": "Narrative delivers what it announces.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-long-unfulfilled-essay",
+    "verdict": "expected",
+    "note": "Three criteria are announced; staff continuity is mentioned once and never evaluated, and the conclusion rests only on cost.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-unsupported-qualities",
+    "verdict": "expected",
+    "note": "Self-assessment with no evidence; guidance or a question only.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-unsupported-comparison",
+    "verdict": "expected",
+    "note": "Comparative claim with no measurement.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-clean-reflection",
+    "verdict": "expected",
+    "note": "Cause, evidence and outcome are present.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "development-long-procedure-gap",
+    "verdict": "expected",
+    "note": "Prerequisite value is referenced but never defined.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "custom-vague-characterization",
+    "verdict": "expected",
+    "note": "Custom instructions limit the reviewer to unsupported characterizations.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "custom-clean-factual",
+    "verdict": "expected",
+    "note": "Checkable numbers only; nothing to report.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "custom-long-document",
+    "verdict": "expected",
+    "note": "Only the final unsupported judgement qualifies; the evidenced paragraphs do not.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "structure-long-audit-gap",
+    "verdict": "expected",
+    "note": "Whole-document gap: audit traceability is announced, never evaluated.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  },
+  {
+    "caseId": "redundancy-long-benchmark-restatement",
+    "verdict": "expected",
+    "note": "Restated plus recalculated duplicate; the shared-directory risk is distinct.",
+    "reviewer": "assistant-draft (awaiting author confirmation)"
+  }
+]

@@ -2,15 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { Editor } from '@tiptap/core'
 import type { Transaction } from '@tiptap/pm/state'
 import { ReviewEditHistory } from '../editor/reviewEdits'
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { OpenAICompatibleProvider } from '../ai/providers/openai'
 import type { AIProvider } from '../ai/types'
 import { AnalysisCache } from '../analyzers/cache'
@@ -19,25 +11,13 @@ import { createAnalyzerRegistry } from '../analyzers/registry'
 import { useLocalAnalysis } from './useLocalAnalysis'
 import { SavedReviews } from '../analyzers/savedReviews'
 import { FeedbackSnapshots } from '../analyzers/feedbackSnapshots'
-import {
-  defaultFindingFilters,
-  filterFindings,
-  underlinedFindings,
-  type FindingFilters,
-} from '../diagnostics/filters'
 import { hash } from '../diagnostics/hash'
 import { refreshDiagnostic } from '../diagnostics/mapping'
-import {
-  captureRevisionReference,
-  canResumeRevisionReference,
-  mapRevisionReference,
-  referenceState,
-  type RevisionReference,
-} from '../diagnostics/revisionReference'
-import type { Diagnostic, Scope, Snapshot } from '../diagnostics/types'
+import type { Diagnostic, Snapshot } from '../diagnostics/types'
 import { readMarkdown, writeMarkdown } from '../documents/markdown'
+import { recoveryDecision } from '../documents/recovery'
 import { snapshot } from '../editor/blocks'
-import { applyFix, decorate, jumpTo } from '../editor/diagnostics'
+import { applyFix, jumpTo } from '../editor/diagnostics'
 import { analyzerEnabled, getProfiles, globallyEnabled, type ProfileId } from '../profiles/profiles'
 import { reconcileReviewContexts } from '../profiles/reviewContext'
 import {
@@ -55,6 +35,10 @@ import {
   type Project,
 } from '../storage/desktop'
 import { useRecentProjects } from './useRecentProjects'
+import { useCrashRecovery } from './useCrashRecovery'
+import { useDocumentSave } from './useDocumentSave'
+import { useFindingsView } from './useFindingsView'
+import { useRevisionMode } from './useRevisionMode'
 import { useNotice } from '../ui/useNotice'
 import { useSettingsState } from './useSettingsState'
 import { createReviewRun } from './reviewRun'
@@ -69,50 +53,26 @@ export function useWorkspaceSession() {
   const profiles = getProfiles(settings)
   const [current, setCurrent] = useState<Snapshot | null>(null),
     currentRef = useRef<Snapshot | null>(null)
-  const [dirty, setDirty] = useState(false),
-    dirtyRef = useRef(false),
-    [saving, setSaving] = useState(false)
-  const fileLock = useRef(false),
-    saveLock = useRef(false),
-    [fileBusy, setFileBusy] = useState(false)
-  const [findings, setFindingsState] = useState<Diagnostic[]>([]),
-    [selected, setSelected] = useState<string | null>(null),
-    [dismissed, setDismissed] = useState(new Set<string>()),
-    [filters, setFiltersState] = useState<FindingFilters>(defaultFindingFilters)
-  const setFilters = useCallback((patch: Partial<FindingFilters>) => {
-    setFiltersState((old) => ({ ...old, ...patch }))
-  }, [])
-  const findingsRef = useRef(findings)
-  // Native save/review completions can interleave before React renders. Keep the
-  // authoritative feedback frame synchronous so a save cannot persist an older list.
-  const setFindings = useCallback<Dispatch<SetStateAction<Diagnostic[]>>>((next) => {
-    const value = typeof next === 'function' ? next(findingsRef.current) : next
-    findingsRef.current = value
-    setFindingsState(value)
-  }, [])
+  const editorRef = useRef<Editor | null>(null),
+    sessionRef = useRef(session),
+    revision = useRef(0)
+  // One findings view: the Analysis pane, the editor underlines and the inspector all
+  // read the same state, so they can never disagree about what is visible.
+  const {
+    findings,
+    findingsRef,
+    setFindings,
+    selected,
+    setSelected,
+    dismissed,
+    setDismissed,
+    filters,
+    setFilters,
+    visibleFindings,
+  } = useFindingsView({ editorRef, analyzers })
   const inspectionRef = useRef<{ token: string; blockId: string; from: number; to: number } | null>(
     null,
   )
-  const [pinnedReference, setPinnedReference] = useState<RevisionReference | null>(null)
-  const referenceRef = useRef<RevisionReference | null>(null)
-  const [referenceOpen, setReferenceOpenState] = useState(false)
-  const referenceOpenRef = useRef(false)
-  const referenceIntent = useRef(0)
-  const setReferenceOpen = (open: boolean) => {
-    referenceOpenRef.current = open
-    referenceIntent.current++
-    setReferenceOpenState(open)
-  }
-  const setReference = (value: RevisionReference | null) => {
-    referenceRef.current = value
-    setPinnedReference(value)
-  }
-  useEffect(() => {
-    if (referenceRef.current && referenceRef.current.sessionToken !== session?.token) {
-      setReference(null)
-      setReferenceOpen(false)
-    }
-  }, [session?.token])
   const [leftOpen, setLeftOpen] = useState(true),
     [rightOpen, setRightOpen] = useState(true),
     [settingsTab, setSettingsTab] = useState<string | null>(null)
@@ -125,11 +85,7 @@ export function useWorkspaceSession() {
   const [profile, setProfile] = useState<ProfileId>('general'),
     [ask, setAsk] = useState<Ask | null>(null),
     [askValue, setAskValue] = useState('')
-  const [unsaved, setUnsaved] = useState<((proceed: boolean) => void) | null>(null),
-    [entryActions, setEntryActions] = useState<FileEntry | null>(null)
-  const editorRef = useRef<Editor | null>(null),
-    sessionRef = useRef(session),
-    revision = useRef(0)
+  const [entryActions, setEntryActions] = useState<FileEntry | null>(null)
   const meta = useRef<ProjectMeta>({ version: 2, documents: {} })
   const cache = useRef(new AnalysisCache()),
     savedReviews = useRef(new SavedReviews(analyzers)),
@@ -139,29 +95,14 @@ export function useWorkspaceSession() {
     provider = useRef<AIProvider>(new OpenAICompatibleProvider()),
     running = useRef<AbortController | null>(null)
   const closePending = useRef(false)
-  const leavePending = useRef<Promise<boolean> | null>(null)
+  // The save pipeline reports cleanliness before the recovery hook is created, so it calls
+  // through this holder.
+  const recoveryActions = useRef<{ clearCurrent: () => void }>({ clearCurrent: () => {} })
   const askRef = useRef(ask)
   askRef.current = ask
-  const saveRef = useRef<() => Promise<boolean>>(async () => false),
-    proceedRef = useRef<() => Promise<boolean>>(async () => true)
-  const persistRef = useRef<() => Promise<void>>(async () => {})
+  const proceedRef = useRef<() => Promise<boolean>>(async () => true)
   const task = (work: () => Promise<unknown>) => {
     void work().catch((error) => showNotice(errorMessage(error), true))
-  }
-  const fileTask = (work: () => Promise<unknown>) => {
-    if (fileLock.current || saveLock.current) return
-    fileLock.current = true
-    setFileBusy(true)
-    void work()
-      .catch((error) => showNotice(errorMessage(error), true))
-      .finally(() => {
-        fileLock.current = false
-        setFileBusy(false)
-      })
-  }
-  const markDirty = (value: boolean) => {
-    dirtyRef.current = value
-    setDirty(value)
   }
   savedReviews.current.setAnalyzers(analyzers)
   sessionRef.current = session
@@ -170,43 +111,61 @@ export function useWorkspaceSession() {
       setAskValue(initial)
       setAsk({ title, description, initial, resolve })
     })
-  const confirmLeave = async () => {
-    if (!dirtyRef.current) return true
-    if (leavePending.current) return leavePending.current
-    leavePending.current = new Promise<boolean>((resolve) => setUnsaved(() => resolve)).finally(
-      () => {
-        leavePending.current = null
-      },
-    )
-    return leavePending.current
+  const refreshTree = async () => {
+    const entries = await storage.list()
+    setProject((old) => (old ? { ...old, entries } : null))
   }
+  // Dirty state, file/save locks, the save pipeline, analysis-metadata persistence and
+  // the “you have unsaved writing” leave confirmation all belong to the saved bytes.
+  const {
+    dirty,
+    dirtyRef,
+    saving,
+    fileBusy,
+    fileLock,
+    saveLock,
+    unsaved,
+    setUnsaved,
+    saveRef,
+    persistRef,
+    markDirty,
+    confirmLeave,
+    persistAnalysis,
+    save,
+    fileTask,
+  } = useDocumentSave({
+    project,
+    dismissed,
+    sessionRef,
+    editorRef,
+    currentRef,
+    revision,
+    findingsRef,
+    settingsRef,
+    meta,
+    profile,
+    stores: { cache, savedReviews, feedback: feedbackSnapshots, history },
+    askName,
+    showNotice,
+    refreshTree,
+    setSession,
+    setFindings,
+    setSelected,
+    setCurrent,
+    onSaved: () => recoveryActions.current.clearCurrent(),
+  })
+  // Crash recovery for unsaved writing: checkpoints in app storage, never in the project.
+  const recovery = useCrashRecovery({
+    project,
+    sessionRef,
+    editorRef,
+    dirtyRef,
+    fileLock,
+    saveLock,
+    showNotice,
+  })
+  recoveryActions.current = recovery
   proceedRef.current = confirmLeave
-  const persistAnalysis = async () => {
-    if (project)
-      await storage.setMetadata(
-        'analysis',
-        {
-          version: 2,
-          cache: cache.current.export(),
-          reviews: savedReviews.current.export(),
-          feedback: feedbackSnapshots.current.export(),
-          history: history.current.export(),
-        },
-        project.root,
-      )
-  }
-  persistRef.current = persistAnalysis
-  useEffect(() => {
-    if (!project || fileBusy) return
-    const timer = setTimeout(() => {
-      void persistRef
-        .current()
-        .catch(() =>
-          showNotice('Could not persist analysis metadata. Markdown is unaffected.', true),
-        )
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [dismissed, project?.root, fileBusy, showNotice])
   useEffect(() => {
     if (!desktopAvailable) return
     let dispose: (() => void) | undefined,
@@ -242,7 +201,13 @@ export function useWorkspaceSession() {
     }
   }, [showNotice])
   const loadDocument = async (path: string, skipPrompt = false) => {
+    const leaving = sessionRef.current?.path
+    const wasDirty = dirtyRef.current
     if (!skipPrompt && !(await confirmLeave())) return
+    // The previous draft was saved or explicitly discarded, so its snapshot is spent. A plain
+    // reload of the same document is not a discard: its snapshot stays available.
+    if (leaving && (leaving !== path || wasDirty)) recovery.clearFor(leaving)
+    recovery.noteOpened()
     await settingsReady.current
     const loaded = await storage.read(path)
     running.current?.abort()
@@ -300,9 +265,64 @@ export function useWorkspaceSession() {
         true,
       )
     }
+    // A checkpoint from before a crash is offered, never applied automatically.
+    const recovered = project ? await recovery.lookupRecovery(project.root, path) : null
+    if (recovered) {
+      if (recoveryDecision(recovered, loaded.hash) === 'superseded')
+        recovery.clearRecovery(recovered.key)
+      else recovery.armRecovery(recovered)
+    }
+  }
+  /**
+   * Load a recovered snapshot into the editor as an ordinary unsaved edit. The session keeps
+   * the disk hash recorded when the snapshot was captured, so a later Save conflicts rather
+   * than overwriting a file that changed elsewhere in the meantime.
+   */
+  const restoreRecovery = () => {
+    const record = recovery.pendingRecovery
+    const active = sessionRef.current
+    if (!record || !active || fileLock.current || saveLock.current) return
+    if (record.documentPath !== active.path || record.projectRoot !== project?.root) {
+      recovery.discardRecovery()
+      return
+    }
+    const source = readMarkdown(record.text)
+    if (source.unsupported.length) {
+      showNotice(
+        `The recovered snapshot contains unsupported Markdown (${source.unsupported.join(', ')}). Nothing was loaded and nothing was written to disk.`,
+        true,
+      )
+      return
+    }
+    const next = {
+      ...active,
+      token: crypto.randomUUID(),
+      source,
+      diskHash: record.diskHash,
+    }
+    recovery.cancelCheckpoint()
+    revision.current = 0
+    editorRef.current = null
+    inspectionRef.current = null
+    sessionRef.current = next
+    pendingRestore.current = null
+    setSession(next)
+    setFindings([])
+    setSelected(null)
+    setDismissed(new Set())
+    setCurrent(null)
+    currentRef.current = null
+    setStatus('')
+    markDirty(true)
+    recovery.dismissRecovery()
+    showNotice(
+      'Recovered writing loaded into the editor. It is unsaved, and Save will not overwrite a file that changed elsewhere.',
+    )
   }
   const openProject = async (path?: string) => {
     if (!(await confirmLeave())) return
+    // Leaving the project means the previous draft was saved or explicitly discarded.
+    recovery.clearCurrent()
     if (running.current) {
       running.current.abort()
       setStatus('Analysis cancelled.')
@@ -404,126 +424,6 @@ export function useWorkspaceSession() {
     }
     if (selectedProject.recentWarning) showNotice(selectedProject.recentWarning, true)
   }
-  const refreshTree = async () => {
-    const entries = await storage.list()
-    setProject((old) => (old ? { ...old, entries } : null))
-  }
-  const save = async (copy = false, beforeLeave = false): Promise<boolean> => {
-    const active = sessionRef.current,
-      editor = editorRef.current
-    if (saveLock.current) return false
-    if (fileLock.current && !beforeLeave) {
-      showNotice('Finish or cancel the current file operation before saving.', true)
-      return false
-    }
-    if (!active || !editor) return true
-    if (active.source.unsupported.length && !copy) {
-      showNotice('This document is read-only. Save a converted copy to retain the original.', true)
-      return false
-    }
-    saveLock.current = true
-    setSaving(true)
-    try {
-      let path = active.path
-      if (copy) {
-        const answer = await askName(
-          'Save a copy',
-          'A relative .md path inside the open project. The original stays untouched.',
-          active.path.replace(/\.md$/i, '-copy.md'),
-        )
-        if (!answer?.trim()) return false
-        path = answer.trim()
-        if (!/\.md$/i.test(path)) path += '.md'
-      }
-      const beforeRevision = revision.current
-      const savedInput = snapshot(editor, active.id, beforeRevision)
-      const savedFindings = [...findingsRef.current]
-      const content = writeMarkdown(active.source, editor.getMarkdown())
-      const diskHash = await storage.save(path, content, copy ? null : active.diskHash)
-      const unchanged = beforeRevision === revision.current
-      const feedbackSaved =
-        copy ||
-        sessionRef.current?.token !== active.token ||
-        feedbackSnapshots.current.capture(
-          savedInput,
-          diskHash,
-          hash(content),
-          unchanged ? findingsRef.current : savedFindings,
-          settingsRef.current.analysis,
-        )
-      const next = {
-        ...active,
-        path,
-        diskHash,
-        original: content,
-        source: copy ? { ...active.source, unsupported: [] } : active.source,
-      }
-      if (sessionRef.current?.token === active.token && !copy) {
-        sessionRef.current = next
-        setSession(next)
-        if (beforeRevision === revision.current) {
-          markDirty(false)
-          savedReviews.current.confirmSave(
-            snapshot(editor, active.id, revision.current),
-            hash(content),
-            active.diskHash,
-            diskHash,
-          )
-        }
-      }
-      if (copy && beforeRevision === revision.current) markDirty(false)
-      if (copy && beforeRevision === revision.current) {
-        const id = crypto.randomUUID()
-        const copied = { ...next, id, token: crypto.randomUUID(), source: readMarkdown(content) }
-        sessionRef.current = copied
-        setSession(copied)
-        revision.current = 0
-        setFindings([])
-        setSelected(null)
-        setCurrent(null)
-        currentRef.current = null
-        meta.current.documents[path] = { id, profile }
-        await refreshTree()
-      }
-      try {
-        await storage.setMetadata('project', meta.current, project?.root)
-        await persistAnalysis()
-        if (!feedbackSaved) {
-          showNotice(
-            'Markdown saved, but the visible feedback could not be saved for reopening. Your draft is safe.',
-            true,
-          )
-          return unchanged
-        }
-      } catch {
-        showNotice('Markdown saved. Analysis metadata could not be saved.', true)
-        return !dirtyRef.current
-      }
-      showNotice(
-        unchanged
-          ? 'Saved to your Markdown file.'
-          : 'Saved. New edits made during the save are still unsaved.',
-      )
-      return unchanged
-    } catch (error) {
-      showNotice(errorMessage(error), true)
-      return false
-    } finally {
-      saveLock.current = false
-      setSaving(false)
-    }
-  }
-  saveRef.current = () => save()
-  useEffect(() => {
-    const shortcut = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault()
-        void saveRef.current()
-      }
-    }
-    document.addEventListener('keydown', shortcut)
-    return () => document.removeEventListener('keydown', shortcut)
-  }, [])
   const reviewEditHistory = useRef(new ReviewEditHistory())
   const onReady = (editor: Editor) => {
     reviewEditHistory.current = new ReviewEditHistory()
@@ -553,9 +453,9 @@ export function useWorkspaceSession() {
           : null
     }
     const pinned = referenceRef.current
-    if (pinned?.sessionToken === active.token)
-      setReference(mapRevisionReference(pinned, before, snap, transaction))
+    if (pinned?.sessionToken === active.token) mapReference(before, snap, transaction)
     markDirty(true)
+    recovery.scheduleCheckpoint()
     setStatus((old) =>
       old.startsWith('Saved review') || old.startsWith('Saved feedback')
         ? 'Document changed since the saved feedback. Previous reviews remain visible.'
@@ -632,33 +532,6 @@ export function useWorkspaceSession() {
       `Saved review · ${restored.scope === 'block' ? 'paragraph' : restored.scope} · ${restored.findings.length} findings · ${new Date(restored.analyzedAt).toLocaleString()}`,
     )
   }, [current?.documentId, session?.token, settingsLoaded, fileBusy])
-  const visibleFindings = useMemo(
-    () => filterFindings(findings, dismissed, filters),
-    [findings, dismissed, filters],
-  )
-  useEffect(() => {
-    // A removed analyzer or a category that is no longer present cannot stay selected.
-    setFiltersState((old) => {
-      const analyzer =
-        old.analyzer !== 'all' && !analyzers.some((a) => a.id === old.analyzer)
-          ? 'all'
-          : old.analyzer
-      const category =
-        old.category !== 'all' && !findings.some((f) => f.category === old.category)
-          ? 'all'
-          : old.category
-      return analyzer === old.analyzer && category === old.category
-        ? old
-        : { ...old, analyzer, category }
-    })
-  }, [analyzers, findings])
-  useEffect(() => {
-    const editor = editorRef.current
-    if (editor && !editor.isDestroyed)
-      decorate(editor, underlinedFindings(visibleFindings, dismissed))
-    // The list, the underlines and the open inspector always describe one view.
-    if (selected && !visibleFindings.some((f) => f.id === selected)) setSelected(null)
-  }, [visibleFindings, dismissed, selected])
   const enabled = (id: string) => analyzerEnabled(settings, id, profile)
   useLocalAnalysis({
     current,
@@ -722,234 +595,6 @@ export function useWorkspaceSession() {
     setRightOpen(true)
     jumpTo(editor, fresh)
   }
-  const retainedReference =
-    pinnedReference?.sessionToken === session?.token ? pinnedReference : null
-  const reference = referenceOpen ? retainedReference : null
-  const canResumeRevision = !!retainedReference && !referenceOpen
-  const selectedForRevision = findings.find((finding) => finding.id === selected)
-  const reviseAsNew = !!(
-    canResumeRevision &&
-    retainedReference &&
-    selectedForRevision &&
-    !canResumeRevisionReference(retainedReference, selectedForRevision, findings)
-  )
-  const referenceView = reference
-    ? referenceState(reference, current, findings, dismissed, analyzers, settings, profile)
-    : null
-  const referenceReviewer = reference
-    ? analyzers.find((a) => a.id === reference.finding.analyzerId)
-    : undefined
-  const referenceScope: Scope | null = referenceReviewer?.scopes.includes('block')
-    ? 'block'
-    : referenceReviewer?.scopes.includes('document')
-      ? 'document'
-      : referenceReviewer?.scopes.includes('selection')
-        ? 'selection'
-        : null
-  const canReviewReference =
-    !!referenceReviewer &&
-    !!referenceScope &&
-    (enabled(referenceReviewer.id) ||
-      (referenceReviewer.origin === 'custom' && globallyEnabled(settings, referenceReviewer.id))) &&
-    (referenceScope === 'document' ||
-      (referenceScope === 'block' ? !!referenceView?.reviewLocation : !!referenceView?.location)) &&
-    (referenceScope !== 'selection' ||
-      referenceView!.location!.to > referenceView!.location!.from) &&
-    !busy &&
-    !fileBusy &&
-    !saving
-  const showRevision = (pin: RevisionReference) => {
-    const active = sessionRef.current,
-      editor = editorRef.current
-    if (
-      !active ||
-      pin.sessionToken !== active.token ||
-      !editor?.isEditable ||
-      fileLock.current ||
-      saveLock.current
-    )
-      return
-    setReference(pin)
-    setReferenceOpen(true)
-    const view = referenceState(
-      pin,
-      snapshot(editor, active.id, revision.current),
-      findingsRef.current,
-      dismissed,
-      createAnalyzerRegistry(settingsRef.current),
-      settingsRef.current,
-      meta.current.documents[active.path]?.profile ?? profile,
-    )
-    if (view.location) editor.chain().focus().setTextSelection(view.location).scrollIntoView().run()
-    else editor.commands.focus(undefined, { scrollIntoView: false })
-    // Explicit opening changes the viewport. Never scroll automatically while editing.
-    requestAnimationFrame(() => {
-      if (
-        !editor.isDestroyed &&
-        referenceOpenRef.current &&
-        referenceRef.current === pin &&
-        sessionRef.current?.token === active.token &&
-        view.location
-      )
-        editor.commands.scrollIntoView()
-    })
-  }
-  const resumeRevision = () => {
-    const pin = referenceRef.current
-    if (pin) showRevision(pin)
-  }
-  const beginRevision = (finding: Diagnostic) => {
-    const active = sessionRef.current,
-      editor = editorRef.current
-    if (!active || !editor?.isEditable || fileLock.current || saveLock.current) return
-    const retained = referenceRef.current
-    if (
-      !referenceOpenRef.current &&
-      retained?.sessionToken === active.token &&
-      canResumeRevisionReference(retained, finding, findingsRef.current)
-    ) {
-      showRevision(retained)
-      return
-    }
-    const live = findingsRef.current.find((f) => f.id === finding.id)
-    if (!live) return
-    const replacement =
-      finding.replacement !== undefined &&
-      (live.replacements?.includes(finding.replacement) || finding.replacement === live.replacement)
-        ? finding.replacement
-        : live.replacement
-    const label = analyzers.find((a) => a.id === live.analyzerId)?.name ?? live.analyzerId
-    const pin = captureRevisionReference(
-      { ...live, replacement },
-      snapshot(editor, active.id, revision.current),
-      active.token,
-      label,
-    )
-    if (!pin) {
-      showNotice('This passage changed. Choose a current finding to revise.', true)
-      return
-    }
-    const latest = referenceRef.current?.latestFindings
-    if (
-      referenceRef.current?.capturedHash === pin.capturedHash &&
-      latest?.some((item) => item.id === pin.finding.id)
-    )
-      pin.latestFindings = latest
-    showRevision(pin)
-  }
-  const closeRevision = () => {
-    // Hide, don't discard: onChange keeps mapping this capture while it is closed.
-    setReferenceOpen(false)
-    editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
-  }
-  const chooseRevisionFinding = () => {
-    setReferenceOpen(false)
-    setRightOpen(true)
-    setSelected(null)
-  }
-  const currentReference = () => {
-    const pin = referenceRef.current,
-      active = sessionRef.current,
-      editor = editorRef.current
-    if (
-      !referenceOpenRef.current ||
-      !pin ||
-      !active ||
-      pin.sessionToken !== active.token ||
-      !editor ||
-      editor.isDestroyed
-    )
-      return null
-    const input = snapshot(editor, active.id, revision.current)
-    const activeProfile = meta.current.documents[active.path]?.profile ?? profile
-    return {
-      pin,
-      editor,
-      view: referenceState(
-        pin,
-        input,
-        findings,
-        dismissed,
-        createAnalyzerRegistry(settingsRef.current),
-        settingsRef.current,
-        activeProfile,
-      ),
-    }
-  }
-  const jumpRevision = () => {
-    const current = currentReference()
-    if (current?.view.location)
-      current.editor.chain().focus().setTextSelection(current.view.location).scrollIntoView().run()
-    else
-      showNotice(
-        'The reference passage moved, split, or was removed. No other occurrence was selected.',
-        true,
-      )
-  }
-  const rereviewRevision = async () => {
-    const current = currentReference()
-    if (!current || !referenceScope || !canReviewReference) return
-    const intent = referenceIntent.current
-    if (referenceScope !== 'document') {
-      const location =
-        referenceScope === 'block' ? current.view.reviewLocation : current.view.location
-      if (!location || (referenceScope === 'selection' && location.from === location.to)) return
-      current.editor
-        .chain()
-        .focus()
-        .setTextSelection(referenceScope === 'selection' ? location : location.from)
-        .run()
-    }
-    const input = snapshot(current.editor, sessionRef.current!.id, revision.current)
-    // Explicit re-review asks for current advice, not an old request-cache entry.
-    const results = await run(referenceScope, current.pin.finding.analyzerId, true)
-    const active = sessionRef.current
-    const pinned = referenceRef.current
-    if (
-      !results ||
-      !referenceOpenRef.current ||
-      referenceIntent.current !== intent ||
-      !active ||
-      current.editor.isDestroyed ||
-      active.token !== current.pin.sessionToken ||
-      !pinned ||
-      pinned.capturedAt !== current.pin.capturedAt ||
-      pinned.finding.id !== current.pin.finding.id
-    )
-      return
-    const after = snapshot(current.editor, active.id, revision.current)
-    if (after.hash !== input.hash) return
-    const relevant = results.filter(
-      (finding) =>
-        finding.analyzerId === current.pin.finding.analyzerId &&
-        (referenceScope === 'document' || finding.blockId === current.pin.finding.blockId),
-    )
-    if (relevant.length) {
-      const chosen =
-        relevant.find((finding) => finding.id === current.pin.finding.id) ?? relevant[0]
-      const fresh = captureRevisionReference(chosen, after, active.token, current.pin.reviewer)
-      if (fresh) setReference({ ...fresh, latestFindings: relevant })
-    } else {
-      const block = after.blocks.find((block) => block.id === current.pin.finding.blockId)
-      setReference({
-        ...pinned,
-        latestFindings: [],
-        cleanReview: {
-          profile,
-          analyzerVersion: referenceReviewer!.version,
-          configurationHash: configurationHash(
-            effectiveConfig(settingsRef.current, current.pin.finding.analyzerId),
-          ),
-          hash: after.hash,
-          text:
-            referenceScope === 'document'
-              ? after.blocks.map((block) => block.text).join('\n\n')
-              : (block?.text ?? ''),
-          at: Date.now(),
-        },
-      })
-    }
-  }
   const findingClick = (id: string) => {
     const finding = findings.find((f) => f.id === id)
     if (!finding) return false
@@ -985,31 +630,50 @@ export function useWorkspaceSession() {
     setSelected(null)
     showNotice('Suggestion applied. Undo is available in the editor.')
   }
-  const acceptRevision = (alternative = 0) => {
-    const current = currentReference()
-    if (
-      !current?.view.canApply ||
-      !current.view.finding ||
-      !current.editor.isEditable ||
-      fileLock.current ||
-      saveLock.current
-    ) {
-      showNotice(
-        'This reference is no longer applicable. Re-review or choose a current finding.',
-        true,
-      )
-      return
-    }
-    const original = current.pin.finding
-    const variants = original.replacements?.length
-      ? original.replacements
-      : original.replacement !== undefined
-        ? [original.replacement]
-        : []
-    const replacement = variants[alternative]
-    if (original.action !== 'replace' || replacement === undefined) return
-    accept({ ...current.view.finding, replacement })
-  }
+  // Revision mode: the captured passage-and-feedback reference and its lifecycle.
+  const {
+    referenceRef,
+    referenceOpenRef,
+    reference,
+    canResumeRevision,
+    reviseAsNew,
+    referenceView,
+    referenceScope,
+    canReviewReference,
+    mapReference,
+    resumeRevision,
+    beginRevision,
+    closeRevision,
+    chooseRevisionFinding,
+    jumpRevision,
+    rereviewRevision,
+    acceptRevision,
+  } = useRevisionMode({
+    sessionRef,
+    editorRef,
+    meta,
+    revision,
+    findingsRef,
+    settingsRef,
+    fileLock,
+    saveLock,
+    current,
+    findings,
+    selected,
+    dismissed,
+    settings,
+    analyzers,
+    profile,
+    busy,
+    fileBusy,
+    saving,
+    enabled,
+    run,
+    accept,
+    setSelected,
+    setRightOpen,
+    showNotice,
+  })
   const createDocument = async () => {
     if (!(await confirmLeave())) return
     let path = await askName(
@@ -1040,6 +704,7 @@ export function useWorkspaceSession() {
     )
     if (!answer || answer === entry.path) return
     await storage.rename(entry.path, answer)
+    await recovery.renameRecovery(entry.path, answer)
     const nextDocs: ProjectMeta['documents'] = {}
     for (const [path, doc] of Object.entries(meta.current.documents))
       nextDocs[
@@ -1068,6 +733,9 @@ export function useWorkspaceSession() {
     )
       return
     await storage.delete(entry.path)
+    // A deleted document takes its unsaved snapshot with it.
+    if (entry.folder) recovery.clearSubtree(entry.path)
+    else recovery.clearFor(entry.path)
     const deletedDocument = meta.current.documents[entry.path]
     if (deletedDocument) {
       savedReviews.current.delete(deletedDocument.id)
@@ -1233,11 +901,16 @@ export function useWorkspaceSession() {
     ask,
     askValue,
     unsaved,
+    pendingRecovery: recovery.pendingRecovery,
+    restoreRecovery,
+    discardRecovery: recovery.discardRecovery,
+    dismissRecovery: recovery.dismissRecovery,
     entryActions,
     editorRef,
     revision,
     history,
     provider,
+
     running,
     saveRef,
     persistRef,

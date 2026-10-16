@@ -103,6 +103,10 @@ export function refreshDiagnostic(finding: Diagnostic, current: Snapshot): Diagn
     block.text.slice(finding.start, finding.end) !== finding.quote
   )
     return null
+  // A prose-only reviewer's finding expires when inline-code formatting changes, even
+  // though the plain text and its block hash are identical.
+  if (finding.formatHash !== undefined && (block.formatHash ?? '') !== finding.formatHash)
+    return null
   if (
     Object.entries(finding.dependencies).some(
       ([id, fingerprint]) => !id.startsWith('$') && blocks.get(id)?.hash !== fingerprint,

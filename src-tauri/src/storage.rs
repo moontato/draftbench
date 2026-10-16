@@ -36,17 +36,49 @@ pub fn scoped(root: &Path, relative: &str) -> Result<PathBuf, String> {
 }
 
 pub fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
+    atomic_write_inner(path, contents, false)
+}
+
+/// For files that hold private author text (crash-recovery snapshots). The temporary file is
+/// created with 0600 **before** any content is written, it never inherits looser permissions
+/// from an older copy, and the final file is verified to stay 0600, so a snapshot is never
+/// briefly world-readable on a shared machine.
+pub fn atomic_write_private(path: &Path, contents: &str) -> Result<(), String> {
+    atomic_write_inner(path, contents, true)
+}
+
+fn atomic_write_inner(path: &Path, contents: &str, private: bool) -> Result<(), String> {
     if fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly()) {
         return Err("This file is read-only. Save a copy instead.".into());
     }
     let parent = path.parent().ok_or("Missing parent directory")?;
     let tmp = parent.join(format!(".draftbench-{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            // Creation mode is masked by the umask; enforce 0600 before a single byte lands.
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        }
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
-        // Preserve existing permissions (especially files containing sensitive writing).
-        if let Ok(meta) = fs::metadata(path) {
+        if private {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // A private file never inherits looser permissions from an older copy.
+                fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+            }
+        } else if let Ok(meta) = fs::metadata(path) {
+            // Preserve existing permissions (especially files containing sensitive writing).
             fs::set_permissions(&tmp, meta.permissions())?;
         }
         fs::rename(&tmp, path)?;
@@ -55,7 +87,21 @@ pub fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     if result.is_err() {
         let _ = fs::remove_file(tmp);
     }
-    result.map_err(|e| format!("Could not safely save file: {e}"))
+    result.map_err(|e| format!("Could not safely save file: {e}"))?;
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o777)
+            .map_err(|e| format!("Could not verify recovery permissions: {e}"))?;
+        if mode != 0o600 {
+            return Err(format!(
+                "Could not protect recovery data: expected 0600, found {:o}.",
+                mode
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn save_document(
@@ -177,6 +223,34 @@ mod tests {
                 .contains("read-only")
         );
         assert_eq!(fs::read_to_string(path).unwrap(), "revision");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_writes_are_restricted_before_content_lands() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovery.json");
+        // An older copy left behind with loose permissions must not be inherited.
+        fs::write(&path, "old snapshot").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        atomic_write_private(&path, "private author text").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "private author text");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // No temporary file survives a successful private write.
+        assert!(fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .all(|entry| entry.file_name() == "recovery.json"));
+        // Ordinary writes still preserve the permissions of the file they replace.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        atomic_write(&path, "ordinary").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     #[test]
     fn paths_and_failed_writes() {

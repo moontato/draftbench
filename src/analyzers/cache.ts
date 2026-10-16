@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { canonical, hash } from '../diagnostics/hash'
 import { inferenceConfig, type EffectiveConfig } from '../settings/model'
-import type { Issue } from '../diagnostics/types'
+import type { Block, Issue } from '../diagnostics/types'
 import type { AnalysisUnit, Analyzer, AnalyzerResult } from './types'
 import { validateResult } from './llm/semantic'
 import { reviewContextFor } from '../profiles/reviewContext'
@@ -13,6 +13,17 @@ interface Cached {
 export class AnalysisCache {
   private entries = new Map<string, Cached>()
   key(analyzer: Analyzer, unit: AnalysisUnit, config: EffectiveConfig, profile?: string): string {
+    // Inline-code formatting changes what a prose-only reviewer legitimately sees, so it
+    // belongs in that reviewer's cache identity. AI reviewers receive plain text either way,
+    // so their existing cache identity is left untouched.
+    const entry = (b: Block, order: number) => [
+      b.type,
+      b.headingLevel ?? null,
+      b.ancestors ?? [],
+      b.text,
+      order,
+      ...(analyzer.formatSensitive ? [b.formatHash ?? ''] : []),
+    ]
     return hash(
       canonical({
         analyzer: analyzer.id,
@@ -22,20 +33,10 @@ export class AnalysisCache {
         policyHash: analyzer.profileAware
           ? reviewContextFor(analyzer, profile).policyHash
           : undefined,
-        targets: unit.targets.map((b) => [
-          b.type,
-          b.headingLevel ?? null,
-          b.ancestors ?? [],
-          b.text,
-          unit.documentScope ? b.order : 0,
-        ]),
-        context: unit.context.map((b) => [
-          b.type,
-          b.headingLevel ?? null,
-          b.ancestors ?? [],
-          b.text,
-          unit.documentScope ? b.order : b.order - unit.targets[0].order,
-        ]),
+        targets: unit.targets.map((b) => entry(b, unit.documentScope ? b.order : 0)),
+        context: unit.context.map((b) =>
+          entry(b, unit.documentScope ? b.order : b.order - unit.targets[0].order),
+        ),
         scope: unit.documentScope,
       }),
     )

@@ -16,6 +16,12 @@ export interface Block {
   order: number
   headingLevel?: number
   ancestors?: string[]
+  /** Inline-code spans in this block's plain text, as [start, end) UTF-16 indices.
+   *  Used only to mask prose analysis; deliberately excluded from `hash` so block
+   *  identity, saved reviews and feedback snapshots keep their existing format. */
+  codeRanges?: { start: number; end: number }[]
+  /** Fingerprint of `codeRanges` ('' when the block has no inline code). */
+  formatHash?: string
 }
 export interface Snapshot {
   documentId: string
@@ -69,6 +75,9 @@ export interface Diagnostic {
   reviewContext?: ReviewContext
   /** Original AI input budgets; restoration/Undo must not erase compatibility checks. */
   reviewInputBudgets?: { paragraphInputChars: number; documentInputChars: number }
+  /** Set by format-sensitive reviewers (Harper): the block's inline-code fingerprint at
+   *  review time. Formatting-only edits invalidate these findings without changing block hashes. */
+  formatHash?: string
   /** The quote is intact, but edits changed the original analysis context. */
   contextChanged?: boolean
   /** Transaction-mapped reference feedback after manual edits; never applicable until reviewed again. */

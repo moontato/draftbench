@@ -27,7 +27,20 @@ export function planScope(analyzer: Analyzer, input: Snapshot, scope: Scope): An
         if (end < 0) end = b.text.length
         const offset = Math.max(0, start)
         const text = b.text.slice(offset, end)
-        return { ...b, text, hash: hash(text), positions: b.positions.slice(offset, end + 1) }
+        return {
+          ...b,
+          text,
+          hash: hash(text),
+          positions: b.positions.slice(offset, end + 1),
+          // Inline-code spans must follow the same offset translation as the text slice.
+          codeRanges: (b.codeRanges ?? [])
+            .map((range) => ({ start: range.start - offset, end: range.end - offset }))
+            .filter((range) => range.end > 0 && range.start < text.length)
+            .map((range) => ({
+              start: Math.max(0, range.start),
+              end: Math.min(text.length, range.end),
+            })),
+        }
       })
       .filter((b) => b.text.trim())
   }
@@ -148,6 +161,9 @@ export async function runAnalyzer(
         )
         if (finding) {
           if (analyzer.engine === 'ai') finding.reviewInputBudgets = { ...budgets }
+          // A formatting-only edit (adding or removing inline code) changes what a prose-only
+          // reviewer legitimately sees, so its findings expire without changing block hashes.
+          if (analyzer.formatSensitive) finding.formatHash = original.formatHash ?? ''
           findings.push(finding)
           validIssues.push(issue)
         } else

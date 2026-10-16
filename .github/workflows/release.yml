@@ -77,13 +77,49 @@ jobs:
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libfuse2 libxdo-dev xdg-utils
       - run: npm ci
-      - name: Native regression tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Rust formatting and regression tests
+        run: |
+          cargo fmt --check --manifest-path src-tauri/Cargo.toml
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build installers
         # Ad-hoc signing lets Apple Silicon run the app; this is NOT Apple distribution signing/notarization.
         env:
           APPLE_SIGNING_IDENTITY: '-'
         run: npm run tauri build -- --ci --target "$BUILD_TARGET" --bundles "$BUNDLES" -- --locked
+      - name: Verify macOS installer contents
+        if: matrix.id == 'macos-universal'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmg=(src-tauri/target/$BUILD_TARGET/release/bundle/dmg/*.dmg)
+          test "${#dmg[@]}" -eq 1
+          mount=/tmp/draftbench-dmg
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "${dmg[0]}" >/dev/null
+          trap 'hdiutil detach "$mount" >/dev/null || true' EXIT
+          app="$mount/Draftbench.app"
+          test -d "$app"
+          binary="$app/Contents/MacOS/draftbench"
+          test -f "$binary"
+          echo 'Architectures in the shipped binary:'
+          lipo -info "$binary"
+          # A universal build must carry both Apple Silicon and Intel slices.
+          lipo -archs "$binary" | tr ' ' '\n' | grep -qx arm64
+          lipo -archs "$binary" | tr ' ' '\n' | grep -qx x86_64
+          echo 'Signature:'
+          codesign -dv --verbose=4 "$app" 2>&1 | tee /tmp/draftbench-codesign.txt
+          # Ad-hoc signing is the documented policy: no Developer ID identity, no notarization.
+          grep -q 'Signature=adhoc' /tmp/draftbench-codesign.txt
+          # codesign reports "TeamIdentifier=not set" for a legitimate ad-hoc build. Only an
+          # actual team identifier means Developer ID signing slipped into an ad-hoc release.
+          team=$(sed -n 's/^TeamIdentifier=//p' /tmp/draftbench-codesign.txt | head -1 | tr -d '[:space:]')
+          if [ -n "$team" ] && [ "$team" != "notset" ]; then
+            echo "Unexpected Developer ID team ($team) in an ad-hoc signed build." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          echo 'Gatekeeper assessment (an ad-hoc build is expected to be rejected here; that is the documented Open Anyway path):'
+          spctl -a -t execute -vv "$app" 2>&1 || true
       - name: Collect and check installer assets
         shell: bash
         env:
@@ -127,7 +163,13 @@ jobs:
           path: release-assets
       - name: Generate checksums
         working-directory: release-assets
-        run: sha256sum -- *.deb *.AppImage *.dmg > SHA256SUMS
+        run: |
+          shopt -s nullglob
+          # Every installer must be listed, so a missing asset cannot slip into a published release.
+          test "$(ls -1 | grep -c '\.deb$\|\.AppImage$\|\.dmg$')" -eq 3
+          sha256sum -- *.deb *.AppImage *.dmg > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
       - name: Upload complete release, then publish
         shell: bash
         run: |

@@ -23,6 +23,11 @@ const fingerprint = z.object({
   dependencies,
   documentScope: z.boolean(),
   nearby: z.boolean(),
+  /** Inline-code fingerprint for format-sensitive reviewers; absent for every other reviewer. */
+  formatHash: z
+    .string()
+    .regex(/^([a-f0-9]{64})?$/)
+    .optional(),
 })
 const itemSchema = z
   .object({
@@ -74,6 +79,7 @@ function encodeFingerprint(finding: Omit<Diagnostic, 'reviewOrigin'>, input: Sna
       }),
     documentScope: !!finding.dependencies.$document,
     nearby: !!finding.dependencies[`$neighbors:${finding.blockId}`],
+    formatHash: finding.formatHash,
   }
 }
 function neighborHash(input: Snapshot, blockIndex: number) {
@@ -185,7 +191,11 @@ export class FeedbackSnapshots {
         !block ||
         block.hash !== saved.location.blockHash ||
         saved.issue.block_id !== String(saved.blockIndex) ||
-        block.text.slice(start, end) !== saved.issue.quote
+        block.text.slice(start, end) !== saved.issue.quote ||
+        // Formatting-only edits expire a prose-only reviewer's feedback even though the
+        // plain text and its block hash are unchanged.
+        (saved.location.formatHash !== undefined &&
+          (block.formatHash ?? '') !== saved.location.formatHash)
       )
         return null
       const from = block.positions[start],
@@ -217,6 +227,7 @@ export class FeedbackSnapshots {
       const finding: Diagnostic = {
         ...mapped,
         id: saved.id,
+        formatHash: saved.location.formatHash,
         reviewInputBudgets: saved.reviewInputBudgets,
         stale: saved.previousReview,
         contextChanged: saved.previousReview,

@@ -4,7 +4,9 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.7 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.8 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+
+v0.2.8 is a stabilization release. **Unsaved writing is now recoverable**: Draftbench checkpoints the draft into its own private app storage while you type and offers **Restore** or **Discard snapshot** when you reopen the document, and restoring can never overwrite a file that changed elsewhere. **Harper no longer lints inline code**, and a formatting-only edit expires the affected Harper finding, cache entry and saved feedback without invalidating earlier reviews. The workspace controller was decomposed into single-owner seams, the evaluation harness gained repeats, parallel sweeps, queue-wait accounting, a 38-case corpus and corrected model-ID instructions, and release builds now verify universal macOS slices, ad-hoc signing and checksums. See the [v0.2.8 stabilization notes](docs/stabilization-v028.md).
 
 v0.2.7 makes the Analysis filters authoritative for the whole review view: choosing an analyzer, severity or category underlines only the findings left in the panel, dismissed findings are never underlined again, and the status line shows how many findings the filters hide with a one-click reset.
 
@@ -32,6 +34,7 @@ v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development re
 - Named OpenAI-compatible backends with independent credentials/options, default backend/model inheritance, per-analyzer overrides, connection tests, and shared global/per-server concurrency limits.
 - Embedded offline **Harper** English grammar/style review; no API key, network, runtime management or downloads. Optional and disabled globally by default, including upgrades.
 - Built-in and editable custom writing profiles, local review caching, automatic exact-match saved-review restoration, versioned settings, safe writes, and conflict detection on save.
+- **Crash recovery for unsaved writing**: while you type, Draftbench keeps a private checkpoint of the draft in its own app storage, and offers it as **Restore** or **Discard snapshot** when you reopen the document. Restoring never overwrites a file that changed elsewhere.
 - Opt-in analyzer/model evaluation CLI with an editable nonfiction corpus and protocol/mapping/latency/false-positive reports.
 - No accounts, telemetry, cloud sync, inference runtime, model downloads, chat, autocomplete, or mandatory cloud services.
 
@@ -135,7 +138,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.7**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.8**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Success notifications automatically disappear after eight seconds. Errors and warnings remain until dismissed, so save/review problems can be read in full; routine successes do not replace them. A warning that review results could not be saved for reopening refers to review metadata, not loss of the Markdown draft.
 
@@ -272,9 +275,9 @@ The original **AI** tab is retained for the migrated Default backend. It is not 
 
 Enable **Harper** in Analyzers (or Analysis), with a profile that includes it. **Settings → Analysis → Automatically review with Harper** is a separate, persistent preference, **off by default**, including when older settings omit it. Leaving it off does not disable Harper: select it explicitly in **Run reviewers**, or choose Harper in the analysis pane's analyzer filter and run analysis. The revision pane's **Re-review** also works while automatic reviews are off. Unfiltered Analyze document/selection shortcuts omit manual-only Harper. Turning automatic reviews off keeps existing feedback; edits still make affected feedback non-applicable until reviewed again. Repeated word continues its local debounce, and AI remains manual.
 
-With automatic Harper enabled, local grammar/style reviews run after the debounce without AI requests. The pinned Rust engine is compiled into the application and needs no connection. American-English curated grammar/style checks are used; spelling is left to native spellcheck and repetition to Repeated word. Fenced code blocks are excluded. Findings, alternative replacement choices, provenance, cache/restoration and reviewed fixes use the common pipeline; no suggestion is applied automatically.
+With automatic Harper enabled, local grammar/style reviews run after the debounce without AI requests. The pinned Rust engine is compiled into the application and needs no connection. American-English curated grammar/style checks are used; spelling is left to native spellcheck and repetition to Repeated word. Fenced code blocks are excluded, and inline code is masked out too: the paragraph Harper receives keeps exactly the same length, with code characters replaced by spaces, so prose keeps its real offsets and no diagnostic can land on, or be reattached from, a code span. Findings, alternative replacement choices, provenance, cache/restoration and reviewed fixes use the common pipeline; no suggestion is applied automatically.
 
-Unicode scalar offsets from Harper are explicitly converted to editor UTF-16 offsets and exact-checked. Paragraph text is plain text; mark-level inline-code exclusion, dialect choices and user dictionaries remain follow-ups. A cancelled native grammar worker may finish in the background, but cannot publish stale results. Upstream Harper is Apache-2.0 licensed; its [license](src-tauri/resources/harper-LICENSE.txt) and [notice](src-tauri/resources/harper-NOTICE.txt) ship with desktop bundles.
+Unicode scalar offsets from Harper are explicitly converted to editor UTF-16 offsets and exact-checked. Paragraph text is plain text; dialect choices and user dictionaries remain follow-ups. Adding or removing inline code is a formatting-only change: it expires affected Harper feedback and cache identity without changing any block hash, so a review is never silently reused against text that is now code. A cancelled native grammar worker may finish in the background, but cannot publish stale results. Upstream Harper is Apache-2.0 licensed; its [license](src-tauri/resources/harper-LICENSE.txt) and [notice](src-tauri/resources/harper-NOTICE.txt) ship with desktop bundles.
 
 ### Opt-in analyzer/model evaluation
 
@@ -285,13 +288,45 @@ npm run eval -- --dry-run
 npm run eval -- --url http://localhost:8080 --model served-model
 npm run eval -- --url http://localhost:8080 --models model-a,model-b --jobs 2
 npm run eval -- --settings /path/to/settings.json --backend default --backend backend-ID
+npm run eval -- --url http://localhost:8080 --model served-model --repeat 3 --sweep 1,2,4
+npm run eval -- --url http://localhost:8080 --model served-model --analyzer clarity,structure --profile general
 ```
 
-Use `--corpus path` to edit/replace `eval/corpus.json`, `--output directory` for reports, and `--help` for all options. The initial 12 cases cover clarity, references, redundancy and structure, with clean negative cases; cases record ID, profile, source, analyzer, expected behavior and optional expected quote. A custom analyzer ID uses its saved definition. Explicit targets compare the selected backend/model, rather than silently inheriting individual analyzer routing.
+Use `--corpus path` to edit/replace `eval/corpus.json`, `--labels path` for the human-label sidecar (default `eval/labels.json` when present), `--output directory` for reports, and `--help` for all options. The corpus currently holds 38 cases across all five AI built-ins plus the `eval-reviewer` custom reviewer, with clean negative cases, multi-paragraph and long document cases; cases record ID, profile, source, analyzer, expected behavior and optional expected quote. Custom-reviewer cases need a settings file that defines that reviewer, so use `--settings eval/eval-settings.json` for them. `--analyzer` and `--profile` only select which corpus cases run. Explicit targets compare the selected backend/model, rather than silently inheriting individual analyzer routing.
+
+`--repeat 1..5` runs every case again for the same target, so a report shows median/p95/slowest review-unit latency and marks each case **stable** or **flaky** instead of resting on one run. `--sweep 1,2,4` repeats the whole evaluation at each review-unit limit and reports **queue wait** separately: how long a review unit waited for a global/backend slot before its request began. Queue wait is scheduler pressure, not model latency, and it is recorded per server. `eval/labels.json` records human judgements about the cases themselves (`expected`, `too-strict`, `too-lenient`, `unclear` plus a note); labels are never sent to a model and only annotate the report.
 
 `DRAFTBENCH_EVAL_API_KEY` supplies the Default key; `DRAFTBENCH_EVAL_KEYS` is a JSON object mapping backend IDs to keys for multiple servers. The CLI does **not** read OS credentials. Do not put keys in corpus/settings files or command-line arguments.
 
-Timestamped JSON/Markdown reports under ignored `eval/results/` include structured-output validity, malformed responses, exact-quote validity, mapping success, finding/negative-case false-positive counts, missed expected issues, expected-quote/case-pass proxies, latency and raw responses/HTTP attempts. These are **not semantic quality scores**: read outputs against the written expectations. The case adapter supports plain paragraphs and ATX headings, not the full editor Markdown model. Reports contain corpus prose and model output; keep them private. This Node-fetch evaluator shares the production reviewer/provider/mapping pipeline, but is not native-transport certification.
+Timestamped JSON/Markdown reports under ignored `eval/results/` include structured-output validity, malformed responses, exact-quote validity, mapping success, finding/negative-case false-positive counts, missed expected issues, expected-quote/case-pass proxies, stable/flaky case verdicts, queue waits, latency and raw responses/HTTP attempts. These are **not semantic quality scores**: read outputs against the written expectations. The case adapter supports plain paragraphs and ATX headings, not the full editor Markdown model. Reports contain corpus prose and model output; keep them private. This Node-fetch evaluator shares the production reviewer/provider/mapping pipeline, but is not native-transport certification.
+
+#### Benchmarking your own models
+
+Draftbench ships no model and no benchmark numbers. Run this on your own machine, against your own server, and read the report before repeating any result.
+
+```sh
+# 1. Start one model, then read the exact ID the server reports. llama-server names the
+#    model after the GGUF metadata, so a 4B and a 9B server report different IDs.
+llama-server -m qwen3.5-4b.Q4_K_M.gguf --host 127.0.0.1 --port 8080 --parallel 2
+curl -s http://127.0.0.1:8080/v1/models   # use the reported id verbatim in --model/--models
+
+# 2. Benchmark it: three repeats per case, at 1, 2 and 4 review units in parallel.
+npm run eval -- --url http://127.0.0.1:8080 --model <reported-id> --repeat 3 --sweep 1,2,4
+
+# 3. Repeat with the larger model on its own port, then compare the two reports.
+llama-server -m qwen3.5-9b.Q4_K_M.gguf --host 127.0.0.1 --port 8081 --parallel 2
+curl -s http://127.0.0.1:8081/v1/models
+npm run eval -- --url http://127.0.0.1:8081 --model <reported-id> --repeat 3 --sweep 1,2,4
+
+# 4. Custom-reviewer cases need the evaluation settings file that defines them.
+npm run eval -- --settings eval/eval-settings.json --url http://127.0.0.1:8080 \
+  --model <reported-id> --analyzer eval-reviewer --repeat 2
+
+# 5. A remote node over Tailscale, with the same accounting.
+npm run eval -- --url http://<tailscale-host>:8080 --model <reported-id> --repeat 2 --jobs 2
+```
+
+Keep `--parallel` on the server and `--jobs`/`--sweep` in the evaluator consistent with the machine you are testing; a mismatch shows up as queue wait, not as model slowness. Compare median/p95 latency, flaky-case counts, malformed rate, mapping ratio, exact-quote ratio, false positives on clean cases and missed expected issues separately — a model that produces more findings is not better.
 
 ## Storage and privacy
 
@@ -319,6 +354,19 @@ Document text is sent only when you manually analyze it, and only to the endpoin
 Supported documents serialize with normalized formatting, not byte-for-byte identity. Frontmatter, UTF-8 BOMs, and newline style are preserved. Supported elements include paragraphs, headings, lists, links, emphasis, quotes, inline/fenced code, and hard breaks.
 
 Tables, raw HTML, images, task lists, and footnotes trigger **read-only protection**. The original stays untouched. Saving a **converted copy** is explicit and may omit unsupported structures; inspect the copy and retain the original. v0.1 is not a lossless editor for every Markdown dialect.
+
+### Crash recovery
+
+Unsaved writing is checkpointed to `recovery.json` in Draftbench's own app-config directory, never inside your writing project. That file is private from the first byte: the temporary file used for the atomic write is created `0600` before any text is written, and the final file is verified to stay `0600`. Checkpoints are debounced by three seconds so continuous typing does not hammer the disk, and forced at least every 30 seconds so an author who never pauses is still covered. Nothing is written while a document is clean, and read-only documents are never checkpointed.
+
+Each snapshot stores the draft text, its hash, the document path, and **the hash of the file as it was on disk when the snapshot was taken**. When you open a document:
+
+- If the snapshot already matches the file, it is dropped silently.
+- If it differs, Draftbench shows the file on disk and offers **Restore into the editor**, **Discard snapshot**, or **Not now** (Escape does the same and keeps the snapshot for next time). Nothing is ever applied automatically.
+
+**Restore** loads the snapshot into the editor as ordinary unsaved writing. Because the snapshot remembers the old file hash, the first Save after restoring reports a conflict if the file changed elsewhere: reload it or **save a copy** instead. Draftbench will not silently overwrite a document that changed since the snapshot. Undo is not available across a restore, but the file on disk is unchanged, so **Reload from disk** remains available.
+
+A snapshot is cleared by a successful Save, by explicitly discarding unsaved changes, by deleting the document or its folder, and by moving to another project after you have saved or discarded the draft. Renaming a document keeps its snapshot attached to the new name. Storage is bounded to the 20 most recent documents, about 2 MB in total and 1 MB per document; the oldest snapshots are dropped first. Recovery is a crash net for the current draft, not version history.
 
 ## Architecture and diagnostics
 

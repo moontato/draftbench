@@ -1684,6 +1684,18 @@ summary:hover .tree-action {
   line-height: 1.8;
   margin: 10px 0 0 24px;
 }
+/* Metadata and actions share the description/fields' left edge, which lines up
+   with the analyzer name after its checkbox. */
+.analyzer-setting small {
+  display: block;
+  font-size: 10px;
+  color: #9ba68e;
+  line-height: 1.7;
+  margin: 8px 0 0 24px;
+}
+.analyzer-setting .management-actions {
+  margin: 14px 0 0 24px;
+}
 .analyzer-auto-review {
   margin: 14px 0 0 24px;
 }

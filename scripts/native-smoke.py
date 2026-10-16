@@ -5,6 +5,7 @@ Uses the real bundled webview, IPC, Rust filesystem, and native HTTP transport.
 Launch tauri-driver with a disposable XDG_CONFIG_HOME; project opens update app-config recents.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -246,12 +247,18 @@ try:
         assert any('have' in f['replacements'] for f in grammar['value']), grammar
         v2['analyzers']['harper']['enabled'] = True
         assert invoke('save_settings', {'value': v2})['ok']
-        grammar_source = '# Grammar fixture\n\n😀 They **has** a plan.\n\n```text\nThey has a plan.\n```\n'
+        grammar_source = (
+            '# Grammar fixture\n\n😀 They **has** a plan.\n\n```text\nThey has a plan.\n```\n\n'
+            'Use `They has` inside inline code.\n'
+        )
         assert invoke('save_document', {'path': 'grammar.md', 'content': grammar_source, 'expectedHash': None})['ok']
         restart_and_open('grammar')
         select_profile('grammar-profile')
         status = analyze('Harper')
         assert 'warnings' not in status, status
+        # Fenced code and inline code are both excluded: only the prose paragraph is linted.
+        assert script('return document.querySelectorAll(".finding-card").length') == 1, status
+        assert script('return [...document.querySelectorAll(".diagnostic")].every(d => !d.closest("code"))')
         assert script('const b = [...document.querySelectorAll(".finding-card")].find(b => b.textContent.includes("“has”")); if (!b) return false; b.click(); return true')
         assert script('const b = [...document.querySelectorAll(".fix-inspector button")].find(b => b.textContent.includes("Apply suggestion")); if (!b || b.disabled) return false; b.click(); return true')
         assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'have'
@@ -259,9 +266,56 @@ try:
         script('document.querySelector(`button[title="Undo"]`).click()')
         assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'has'
         with review_lock: assert review_stats['requests'] == 12  # No HTTP during offline review/fix.
+        # Crash recovery: an unsaved edit is checkpointed in app storage, offered again after a
+        # restart, and restoring never overwrites a file that changed elsewhere.
+        assert script('const b = [...document.querySelectorAll(".finding-card")].find(b => b.textContent.includes("“has”")); if (!b) return false; b.click(); return true')
+        assert script('const b = [...document.querySelectorAll(".fix-inspector button")].find(b => b.textContent.includes("Apply suggestion")); if (!b || b.disabled) return false; b.click(); return true')
+        assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'have'
+        records = []
+        for _ in range(120):
+            records = invoke('load_recovery')['value']['records']
+            if records:
+                break
+            time.sleep(.1)
+        assert records, 'typing produced no recovery checkpoint'
+        snapshot = records[0]
+        assert snapshot['documentPath'] == 'grammar.md' and snapshot['projectRoot'] == canonical, snapshot
+        assert snapshot['textHash'] == hashlib.sha256(snapshot['text'].encode()).hexdigest(), snapshot
+        # The snapshot remembers the file as it was, which is what makes a later Save conflict.
+        assert snapshot['diskHash'] == hashlib.sha256(grammar_source.encode()).hexdigest(), snapshot
+        assert '**have**' in snapshot['text'] and '**has**' not in snapshot['text'], snapshot['text']
+        external = 'Externally rewritten after the snapshot.\n'
+        Path(directory, 'grammar.md').write_text(external)
+        restart_and_open('grammar')
+        assert script('return !!document.querySelector(`[aria-label="Recovered writing"]`)')
+        assert script('return document.querySelector(".ProseMirror")?.innerText.includes("Externally rewritten")')
+        assert script('const b = [...document.querySelectorAll(".small-dialog button")].find(b => b.textContent === "Restore into the editor"); if (!b) return false; b.click(); return true')
+        assert script('return document.querySelector(".ProseMirror strong")?.textContent') == 'have'
+        assert script('const b = [...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Save"); if (!b || b.disabled) return false; b.click(); return true')
+        for _ in range(60):
+            if script('return [...document.querySelectorAll("[role=alert], .notice")].some(n => (n.textContent || "").includes("CONFLICT"))'):
+                break
+            time.sleep(.1)
+        assert script('return [...document.querySelectorAll("[role=alert], .notice")].some(n => (n.textContent || "").includes("CONFLICT"))'), 'Save silently overwrote a changed file'
+        assert Path(directory, 'grammar.md').read_text() == external
+        # The recovered writing is kept in a new file; the file that changed elsewhere is untouched.
+        assert script('const b = [...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Save a copy…"); if (!b || b.disabled) return false; b.click(); return true')
+        for _ in range(40):
+            if script('return !!document.querySelector(`[aria-label="Save a copy"]`)'):
+                break
+            time.sleep(.1)
+        assert script('const d = document.querySelector(`[aria-label="Save a copy"]`); if (!d) return false; const i = d.querySelector("input"); const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set; set.call(i, "recovered.md"); i.dispatchEvent(new Event("input", { bubbles: true })); return true')
+        assert script('const b = document.querySelector(`[aria-label="Save a copy"] button[type="submit"]`); if (!b) return false; b.click(); return true')
+        for _ in range(60):
+            if Path(directory, 'recovered.md').exists():
+                break
+            time.sleep(.1)
+        assert '**have**' in Path(directory, 'recovered.md').read_text()
+        assert Path(directory, 'grammar.md').read_text() == external
+        assert invoke('load_recovery')['value']['records'] == []
         assert invoke('remove_recent_project', {'path': canonical})['value'] == []
         assert Path(directory, 'reopen.md').read_text() == long_source
-        assert Path(directory, 'grammar.md').read_text() == grammar_source
+        assert Path(directory, 'grammar.md').read_text() == external
         with tempfile.TemporaryDirectory(prefix='draftbench-other-', dir=os.environ.get('TMPDIR')) as other:
             assert invoke('open_project', {'path': other})['ok']
             rejected = invoke('write_metadata', {'name': 'analysis', 'value': {'private': 'old project prose'}, 'projectRoot': canonical})
@@ -269,7 +323,7 @@ try:
             assert not Path(other, '.draftbench').exists()
             assert not invoke('read_metadata', {'name': 'analysis', 'projectRoot': canonical})['ok']
             assert invoke('remove_recent_project', {'path': str(Path(other).resolve())})['value'] == []
-        print('PASS: project-pinned metadata refusal plus real bundled WebKit/IPC, Markdown CRUD/conflicts/paths, persistent recents, v1→v2 migration, long-input budgets/cache, custom reviewers/profile across two native servers (global peak 3; backend peaks 1/2; isolated keys), and embedded Harper Unicode/code exclusion/mark-preserving Apply/Undo with no HTTP.')
+        print('PASS: project-pinned metadata refusal plus real bundled WebKit/IPC, Markdown CRUD/conflicts/paths, persistent recents, v1→v2 migration, long-input budgets/cache, custom reviewers/profile across two native servers (global peak 3; backend peaks 1/2; isolated keys), and embedded Harper Unicode/code exclusion/mark-preserving Apply/Undo with no HTTP, and crash-recovery checkpoints that survive a restart, offer Restore, refuse to overwrite a file changed elsewhere, and clear on Save.')
 finally:
     if session:
         webdriver('DELETE', '/session/' + session)

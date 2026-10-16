@@ -1,0 +1,94 @@
+{
+  "version": 2,
+  "ai": {
+    "serverUrl": "http://localhost:8080",
+    "model": "qwen3-8b",
+    "timeoutMs": 120000,
+    "temperature": 0.1,
+    "maxTokens": 2048,
+    "credentialGeneration": 0
+  },
+  "backends": [
+    {
+      "serverUrl": "http://localhost:8080",
+      "model": "qwen3-8b",
+      "timeoutMs": 120000,
+      "temperature": 0.1,
+      "maxTokens": 2048,
+      "credentialGeneration": 0,
+      "id": "default",
+      "name": "Default",
+      "credentialRef": "openai-compatible",
+      "parallelJobs": 2
+    }
+  ],
+  "defaultBackend": "default",
+  "customAnalyzers": [
+    {
+      "id": "eval-reviewer",
+      "name": "Evaluation reviewer",
+      "description": "Developer-corpus reviewer used only by `npm run eval`. It reports vague, unsupported characterizations of the author's own work.",
+      "enabled": true,
+      "scope": "paragraph",
+      "severity": "suggestion",
+      "instructions": "You review one paragraph of a draft at a time. Report only vague, unsupported characterizations of the author's own work or results - claims such as \"a total mess\", \"much better\" or \"everyone agreed\" that carry no observable evidence. Quote the exact words from the paragraph, explain what a reader cannot verify, and suggest what the author could add. Never rewrite the paragraph, never invent facts, examples or numbers, and never comment on style, grammar or length. If the paragraph makes only concrete, checkable statements, return no issues."
+    }
+  ],
+  "customProfiles": [
+    {
+      "id": "eval-profile",
+      "name": "Evaluation profile",
+      "description": "Profile used by the developer evaluation corpus.",
+      "enabled": ["eval-reviewer"]
+    }
+  ],
+  "analysis": {
+    "parallelJobs": 2,
+    "legacySingleModel": false,
+    "autoHarper": false,
+    "paragraphInputChars": 12000,
+    "documentInputChars": 48000
+  },
+  "analyzers": {
+    "repeated-word": {
+      "enabled": true,
+      "model": ""
+    },
+    "clarity": {
+      "enabled": true,
+      "model": ""
+    },
+    "ambiguous-reference": {
+      "enabled": true,
+      "model": ""
+    },
+    "redundancy": {
+      "enabled": true,
+      "model": ""
+    },
+    "structure": {
+      "enabled": true,
+      "model": ""
+    },
+    "development": {
+      "enabled": true,
+      "model": ""
+    },
+    "harper": {
+      "enabled": false,
+      "model": ""
+    },
+    "eval-reviewer": {
+      "enabled": true,
+      "model": "",
+      "backend": "default"
+    }
+  },
+  "editor": {
+    "fontSize": 18,
+    "spellcheck": true
+  },
+  "general": {
+    "defaultProfile": "general"
+  }
+}

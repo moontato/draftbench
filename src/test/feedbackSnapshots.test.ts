@@ -259,3 +259,50 @@ it('rejects corrupt offsets rather than selecting another identical occurrence',
   ).toBeNull()
   expect(() => corrupt.import({ version: 999, documents: [] })).toThrow('corrupt')
 })
+it('expires Harper feedback when only inline-code formatting changes, keeping block hashes intact', () => {
+  const plain = open('She could of finished the report.\n'),
+    input = snapshot(plain, 'doc', 0),
+    harper = analyzers.find((analyzer) => analyzer.id === 'harper')!,
+    block = input.blocks[0]
+  const finding = resolveIssue(
+    {
+      block_id: block.id,
+      quote: 'could of',
+      offset: block.text.indexOf('could of'),
+      message: 'Use could have.',
+      explanation: 'Could of is not the intended verb phrase.',
+      replacement: 'could have',
+      severity: 'warning',
+      category: 'harper-grammar',
+    },
+    input,
+    harper.id,
+    harper.version,
+    { kind: 'deterministic', name: 'Harper 2.11.0 · offline' },
+    configurationHash(effectiveConfig(settings, harper.id)),
+    { [block.id]: block.hash },
+  )!
+  finding.formatHash = block.formatHash ?? ''
+  const store = new FeedbackSnapshots()
+  expect(store.capture(input, hash('markdown'), hash('serialized'), [finding])).toBe(true)
+  const imported = new FeedbackSnapshots()
+  imported.import(JSON.parse(JSON.stringify(store.export())))
+  // Identical words and identical block hash; only the inline-code formatting differs.
+  const coded = snapshot(open('She `could of` finished the report.\n'), 'doc', 0)
+  expect(coded.blocks[0].text).toBe(block.text)
+  expect(coded.blocks[0].hash).toBe(block.hash)
+  expect(coded.blocks[0].formatHash).not.toBe(block.formatHash)
+  expect(
+    imported.restore(coded, hash('markdown'), hash('serialized'), analyzers, settings, 'general'),
+  ).toBeNull()
+  expect(
+    imported.restore(
+      snapshot(open('She could of finished the report.\n'), 'doc', 0),
+      hash('markdown'),
+      hash('serialized'),
+      analyzers,
+      settings,
+      'general',
+    ),
+  ).toHaveLength(1)
+})

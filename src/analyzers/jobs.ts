@@ -47,13 +47,32 @@ export async function mapConcurrent<T, R>(
   return results
 }
 
+export interface QueueStats {
+  resource: string
+  /** Review units that had to wait for a global or backend slot. */
+  waited: number
+  completed: number
+  totalWaitMs: number
+  maxWaitMs: number
+  p50WaitMs: number
+  p95WaitMs: number
+}
+const percentile = (values: number[], fraction: number) => {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))]
+}
+
 // A single queue owns both limits; waiting for a backend never holds a global slot.
 // It scans for runnable work, so a saturated server cannot block another server.
 export class AnalysisJobs {
   private active = 0
   private activeByResource = new Map<string, number>()
+  private completedByResource = new Map<string, number>()
   private waiting: { resource: string; grant: () => void }[] = []
   private caps = new Map<string, number>()
+  // Queue pressure is measured for the opt-in evaluation harness; it never changes scheduling.
+  private waits = new Map<string, number[]>()
   constructor(
     readonly limit: number,
     private backends: Record<string, { resource: string; limit: number }> = {},
@@ -67,6 +86,31 @@ export class AnalysisJobs {
   backendLimit(id: string): number {
     return Math.min(this.limit, this.caps.get(this.backends[id]?.resource ?? id) ?? this.limit)
   }
+  /** The shared server identity a backend routes to (the queue-accounting key). */
+  resourceOf(backendId: string): string {
+    return this.backends[backendId]?.resource ?? backendId
+  }
+  private recordWait(resource: string, ms: number) {
+    if (!(ms >= 1)) return // Sub-millisecond hand-offs are not queue pressure.
+    const samples = this.waits.get(resource) ?? []
+    if (samples.length < 5_000) samples.push(ms)
+    this.waits.set(resource, samples)
+  }
+  queueStats(resource: string): QueueStats {
+    const samples = this.waits.get(resource) ?? []
+    return {
+      resource,
+      waited: samples.length,
+      completed: this.completedByResource.get(resource) ?? 0,
+      totalWaitMs: samples.reduce((total, ms) => total + ms, 0),
+      maxWaitMs: samples.length ? Math.max(...samples) : 0,
+      p50WaitMs: percentile(samples, 0.5),
+      p95WaitMs: percentile(samples, 0.95),
+    }
+  }
+  queueResources(): string[] {
+    return [...new Set([...this.waits.keys(), ...this.completedByResource.keys()])]
+  }
   private pump() {
     while (this.active < this.limit) {
       const index = this.waiting.findIndex(
@@ -79,7 +123,8 @@ export class AnalysisJobs {
   }
   async run<T>(signal: AbortSignal, action: () => Promise<T>, backendId = ''): Promise<T> {
     if (signal.aborted) throw new Error('Analysis cancelled.')
-    const resource = this.backends[backendId]?.resource ?? backendId
+    const resource = this.backends[backendId]?.resource ?? backendId,
+      queued = performance.now()
     await new Promise<void>((resolve, reject) => {
       const entry = {
         resource,
@@ -99,8 +144,10 @@ export class AnalysisJobs {
       signal.addEventListener('abort', cancel, { once: true })
       this.pump()
     })
+    this.recordWait(resource, performance.now() - queued)
     try {
       if (signal.aborted) throw new Error('Analysis cancelled.')
+      this.completedByResource.set(resource, (this.completedByResource.get(resource) ?? 0) + 1)
       return await action()
     } finally {
       this.active--

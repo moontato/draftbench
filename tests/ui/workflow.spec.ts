@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { createHash } from 'node:crypto'
 import packageMetadata from '../../package.json' with { type: 'json' }
 import { defaultSettings } from '../../src/settings/model'
 const appVersion = packageMetadata.version
@@ -12,6 +13,16 @@ interface FixtureSeed {
   unavailableProjects?: string[]
   recentLoadDelayMs?: number
   recentWriteFails?: boolean
+  recovery?: {
+    key: string
+    projectRoot: string
+    documentPath: string
+    documentId: string
+    text: string
+    textHash: string
+    diskHash: string
+    capturedAt: number
+  }[]
   reviewAction?: 'replace' | 'guide' | 'question'
   harperExplanation?: string
 }
@@ -33,6 +44,7 @@ async function installDesktopFixture(
     const metadata: Record<string, unknown> = seed.metadata ?? {}
     let savedSettings: unknown = seed.settings ?? null
     let recentProjects = seed.recentProjects ?? []
+    let recovery = seed.recovery ?? []
     const fileHash = async (text: string) =>
       Array.from(
         new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
@@ -61,6 +73,7 @@ async function installDesktopFixture(
           byServer: Record<string, { active: number; peak: number; requests: number }>
         }
         readonly recentProjects: typeof recentProjects
+        readonly recovery: typeof recovery
       }
     }
     testWindow.isTauri = true
@@ -88,6 +101,9 @@ async function installDesktopFixture(
       },
       get recentProjects() {
         return recentProjects
+      },
+      get recovery() {
+        return recovery
       },
     }
     testWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} }
@@ -187,6 +203,25 @@ async function installDesktopFixture(
         if (command === 'load_settings') return savedSettings
         if (command === 'save_settings') {
           savedSettings = args.value
+          return
+        }
+        if (command === 'load_recovery') return { version: 1, records: structuredClone(recovery) }
+        if (command === 'write_recovery') {
+          const record = structuredClone(args.record) as {
+            key: string
+            documentPath: string
+            text: string
+            textHash: string
+          }
+          if (record.textHash !== (await fileHash(record.text)))
+            throw 'Recovery snapshot is too large or malformed to store.'
+          recovery = recovery.filter((item) => item.key !== record.key)
+          recovery.push(record as (typeof recovery)[number])
+          return
+        }
+        if (command === 'clear_recovery') {
+          recovery =
+            args.key == null ? [] : recovery.filter((item) => item.key !== String(args.key))
           return
         }
         if (
@@ -326,6 +361,66 @@ async function fixtureCallCount(page: Page, command: string): Promise<number> {
   )
 }
 
+interface FixtureRecoveryRecord {
+  key: string
+  projectRoot: string
+  documentPath: string
+  documentId: string
+  text: string
+  textHash: string
+  diskHash: string
+  capturedAt: number
+}
+const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
+// Mirrors the native key: project root, NUL, document path.
+function recoverySeed(
+  root: string,
+  documentPath: string,
+  text: string,
+  diskText: string,
+  ageMs = 60_000,
+): FixtureRecoveryRecord[] {
+  return [
+    {
+      key: sha256(`${root}\u0000${documentPath}`),
+      projectRoot: root,
+      documentPath,
+      documentId: 'recovered-document',
+      text,
+      textHash: sha256(text),
+      diskHash: sha256(diskText),
+      capturedAt: Date.now() - ageMs,
+    },
+  ]
+}
+async function fixtureRecovery(page: Page): Promise<FixtureRecoveryRecord[]> {
+  return page.evaluate(() =>
+    structuredClone(
+      (window as unknown as { fixture: { recovery: FixtureRecoveryRecord[] } }).fixture.recovery,
+    ),
+  )
+}
+async function fixtureFile(page: Page, path: string): Promise<string> {
+  return page.evaluate(
+    (path) =>
+      (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[path],
+    path,
+  )
+}
+async function writeFixtureFile(page: Page, path: string, content: string): Promise<void> {
+  await page.evaluate(
+    ([path, content]) => {
+      ;(window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[path] =
+        content
+    },
+    [path, content],
+  )
+}
+async function openEssay(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+}
+
 // Restart the renderer with only the native-owned files/settings/sidecars.
 // No editor state, block identities, request cache objects or React state survive.
 async function restartFixture(page: Page): Promise<Page> {
@@ -336,6 +431,7 @@ async function restartFixture(page: Page): Promise<Page> {
           files: Record<string, string>
           metadata: Record<string, unknown>
           settings: unknown
+          recovery: FixtureRecoveryRecord[]
         }
       }
     ).fixture
@@ -343,6 +439,7 @@ async function restartFixture(page: Page): Promise<Page> {
       files: fixture.files,
       metadata: fixture.metadata,
       settings: fixture.settings,
+      recovery: fixture.recovery,
     })
   })
   const restarted = await page.context().newPage()
@@ -2210,6 +2307,55 @@ test('Analysis groups automatic review under Harper and separates the cache acti
   expect(await fixtureCallCount(page, 'save_settings')).toBe(0)
 })
 
+test('Analyzers settings align metadata, fields and actions under the analyzer name', async ({
+  page,
+}) => {
+  const settings = defaultSettings()
+  settings.analyzers.harper.enabled = true
+  await installDesktopFixture(page, { settings })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
+  await dialog.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  const edges = async (region: string, parts: Record<string, string>) => {
+    const block = dialog.getByRole('region', { name: region, exact: true })
+    await block.scrollIntoViewIfNeeded()
+    const checkbox = (await block.locator('input[type="checkbox"]').first().boundingBox())!
+    const boxes = await Promise.all(
+      Object.entries(parts).map(
+        async ([key, selector]) => [key, await block.locator(selector).boundingBox()] as const,
+      ),
+    )
+    const left = new Map<string, number>()
+    for (const [key, box] of boxes) {
+      expect(box, key).not.toBeNull()
+      left.set(key, box!.x)
+    }
+    // The checkbox stays at the section edge; everything below it shares one edge.
+    expect(
+      [...new Set(left.values())],
+      [...left].map(([k, v]) => `${k}=${v}`).join(' '),
+    ).toHaveLength(1)
+    expect([...left.values()][0]).toBeGreaterThan(checkbox.x)
+    return left
+  }
+  await edges('Clarity analyzer settings', {
+    description: 'p',
+    origin: 'small >> nth=0',
+    backend: '.small-field >> nth=0',
+    model: '.small-field >> nth=1',
+    effective: 'small >> nth=1',
+    actions: '.management-actions',
+  })
+  await edges('Harper analyzer settings', {
+    description: 'p >> nth=0',
+    origin: 'small',
+    automatic: '.analyzer-auto-review',
+  })
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(await fixtureCallCount(page, 'save_settings')).toBe(0)
+})
+
 test('automatic Harper defaults off, explicit selection works, and the independent preference persists across restart', async ({
   page,
 }) => {
@@ -2430,6 +2576,45 @@ test('Harper findings share inline review, suggestion choice and normal Undo/Red
         ).length,
     ),
   ).toBe(0)
+})
+
+test('Harper reviews prose around inline code and never underlines the code span', async ({
+  page,
+}) => {
+  await installDesktopFixture(page, {
+    files: { 'essay.md': 'Use `could of` in code and she could of finished the report.\n' },
+    harperExplanation: 'Use could have.',
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await page.getByRole('button', { name: 'Analyzers', exact: true }).click()
+  await page
+    .getByRole('region', { name: 'Harper analyzer settings', exact: true })
+    .getByRole('checkbox', { name: /^Harper\b/ })
+    .check()
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await runReviewers(page, ['Harper'])
+  // The code span is masked at identical length, so only the prose occurrence is linted.
+  await expect(page.getByRole('button', { name: /Use could have/ })).toHaveCount(1)
+  const underline = page.locator('.editor-scroll .diagnostic')
+  await expect(underline).toHaveCount(1)
+  await expect(underline).toHaveText('could of')
+  await expect(page.locator('.tiptap code')).toHaveText('could of')
+  await expect(page.locator('.tiptap code .diagnostic')).toHaveCount(0)
+  await page.getByRole('button', { name: /Use could have/ }).click()
+  await page.getByRole('button', { name: 'Apply suggestion', exact: true }).click()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files[
+          'essay.md'
+        ],
+    ),
+  ).toBe('Use `could of` in code and she could have finished the report.\n')
 })
 
 test('custom reviewer validation, duplication, editing/deletion, and corrupt entry recovery are isolated', async ({
@@ -2771,6 +2956,143 @@ test('stabilization: same-name reviewers remain separate and removed profile mem
   await page.getByRole('button', { name: 'Save settings' }).click()
   await expect(page.getByLabel('Filter by analyzer')).toHaveValue('all')
   await expect(page.locator('.finding-card')).toHaveCount(1)
+})
+test('recovery: an unsaved snapshot is offered, deferring keeps it, and restoring cannot overwrite a changed file', async ({
+  page,
+}) => {
+  const disk = 'Draft as it is on disk.\n'
+  const recovered = 'The paragraph that was never saved.\n'
+  await installDesktopFixture(page, {
+    files: { 'essay.md': disk },
+    recovery: recoverySeed('/writing', 'essay.md', recovered, disk),
+  })
+  await page.goto('/')
+  await openEssay(page)
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await expect(editor).toContainText('Draft as it is on disk.')
+  const dialog = page.getByRole('dialog', { name: 'Recovered writing' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('essay.md')
+  await expect(dialog).toContainText('about a minute ago')
+  await dialog.getByRole('button', { name: 'Not now' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(editor).toContainText('Draft as it is on disk.')
+  expect(await fixtureRecovery(page)).toHaveLength(1)
+  // Deferring hides the prompt without discarding the snapshot: reopening offers it again.
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Restore into the editor' }).click()
+  await expect(editor).toContainText('The paragraph that was never saved.')
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
+  // The file changed elsewhere after the snapshot was captured.
+  await writeFixtureFile(page, 'essay.md', 'Someone else rewrote this file.\n')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('CONFLICT')
+  expect(await fixtureFile(page, 'essay.md')).toBe('Someone else rewrote this file.\n')
+  await expect(editor).toContainText('The paragraph that was never saved.')
+})
+test('recovery: discarding a snapshot removes it for good', async ({ page }) => {
+  const disk = 'Draft as it is on disk.\n'
+  await installDesktopFixture(page, {
+    files: { 'essay.md': disk },
+    recovery: recoverySeed('/writing', 'essay.md', 'Unsaved paragraph.\n', disk),
+  })
+  await page.goto('/')
+  await openEssay(page)
+  const dialog = page.getByRole('dialog', { name: 'Recovered writing' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Discard snapshot' }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(await fixtureRecovery(page)).toHaveLength(0)
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+})
+test('recovery: a snapshot that already matches the file is dropped without a prompt', async ({
+  page,
+}) => {
+  const disk = 'Draft as it is on disk.\n'
+  await installDesktopFixture(page, {
+    files: { 'essay.md': disk },
+    recovery: recoverySeed('/writing', 'essay.md', disk, disk),
+  })
+  await page.goto('/')
+  await openEssay(page)
+  await expect(page.getByRole('dialog', { name: 'Recovered writing' })).toHaveCount(0)
+  await expect.poll(async () => (await fixtureRecovery(page)).length, { timeout: 4_000 }).toBe(0)
+  expect(await fixtureCallCount(page, 'clear_recovery')).toBe(1)
+})
+test('recovery: typing checkpoints the draft and a successful Save clears it', async ({ page }) => {
+  const disk =
+    '# A better report\n\nThe the plan has merit.\n\nThis is unclear.\n\nA separate paragraph gives the reader context.\n'
+  await installDesktopFixture(page, { files: { 'essay.md': disk } })
+  await page.goto('/')
+  await openEssay(page)
+  // Opening a clean document never writes a checkpoint.
+  expect(await fixtureCallCount(page, 'write_recovery')).toBe(0)
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await editor.press('Control+End')
+  await page.keyboard.type(' A new sentence written without saving.')
+  await expect.poll(async () => (await fixtureRecovery(page)).length, { timeout: 9_000 }).toBe(1)
+  const [record] = await fixtureRecovery(page)
+  expect(record.documentPath).toBe('essay.md')
+  expect(record.text).toContain('A new sentence written without saving.')
+  // The snapshot remembers the file as it was, which is what makes a later Save conflict.
+  expect(record.diskHash).toBe(sha256(disk))
+  expect(record.textHash).toBe(sha256(record.text))
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  expect(await fixtureRecovery(page)).toHaveLength(0)
+})
+test('recovery: a restart offers the checkpoint that typing produced', async ({ page }) => {
+  await installDesktopFixture(page)
+  await page.goto('/')
+  await openEssay(page)
+  const editor = page.getByRole('textbox', { name: 'Document writing editor' })
+  await editor.click()
+  await editor.press('Control+End')
+  await page.keyboard.type(' A sentence written just before the app closed.')
+  await expect.poll(async () => (await fixtureRecovery(page)).length, { timeout: 9_000 }).toBe(1)
+  const restarted = await restartFixture(page)
+  const restartedEditor = restarted.getByRole('textbox', { name: 'Document writing editor' })
+  // The file on disk never changed, so the reopened document shows the saved bytes first.
+  await expect(restartedEditor).toContainText('A separate paragraph gives the reader context.')
+  const dialog = restarted.getByRole('dialog', { name: 'Recovered writing' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Restore into the editor' }).click()
+  await expect(restartedEditor).toContainText('A sentence written just before the app closed.')
+  await expect(restarted.getByRole('button', { name: 'Save', exact: true })).toBeEnabled()
+  await restarted.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(restarted.getByRole('button', { name: 'Save', exact: true })).toBeDisabled()
+  const saved = await restarted.evaluate(
+    () => (window as unknown as { fixture: { files: Record<string, string> } }).fixture.files,
+  )
+  expect(saved['essay.md']).toContain('A sentence written just before the app closed.')
+})
+test('recovery: renaming a document keeps its snapshot attached to the new path', async ({
+  page,
+}) => {
+  const disk = 'Draft as it is on disk.\n'
+  await installDesktopFixture(page, {
+    files: { 'essay.md': disk },
+    recovery: recoverySeed('/writing', 'essay.md', 'Unsaved paragraph.\n', disk),
+  })
+  await page.goto('/')
+  await openEssay(page)
+  const dialog = page.getByRole('dialog', { name: 'Recovered writing' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Not now' }).click()
+  await page.getByRole('button', { name: 'Actions for essay.md' }).click()
+  await page.getByRole('button', { name: 'Rename', exact: true }).click()
+  const rename = page.getByRole('dialog', { name: 'Rename', exact: true })
+  await rename.getByRole('textbox').fill('kept.md')
+  await rename.getByRole('button', { name: 'Continue' }).click()
+  await expect(page.locator('.document-breadcrumb')).toContainText('kept.md')
+  await expect
+    .poll(async () => (await fixtureRecovery(page))[0]?.documentPath, { timeout: 4_000 })
+    .toBe('kept.md')
+  await page.getByRole('button', { name: 'kept', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Recovered writing' })).toBeVisible()
 })
 test('preview clearly identifies desktop-only capabilities', async ({ page }) => {
   await page.goto('/')

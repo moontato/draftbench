@@ -1,6 +1,7 @@
 mod grammar;
 mod network;
 mod recent_projects;
+mod recovery;
 mod storage;
 
 use serde::Serialize;
@@ -351,7 +352,10 @@ pub fn run() {
             has_api_key,
             ai_http,
             harper_review,
-            cancel_request
+            cancel_request,
+            recovery::load_recovery,
+            recovery::write_recovery,
+            recovery::clear_recovery
         ])
         .run(tauri::generate_context!())
         .expect("Could not launch Draftbench");

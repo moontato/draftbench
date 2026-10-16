@@ -32,6 +32,7 @@ import { useWorkspaceSession } from './useWorkspaceSession'
 import { backendConfig } from '../settings/model'
 import { ReviewerRunMenu } from './ReviewerRunMenu'
 import { RevisionPane } from '../diagnostics/RevisionPane'
+import { recoveryLabel } from '../documents/recovery'
 import { useRevisionLayout } from '../diagnostics/useRevisionLayout'
 function FileTree({
   entries,
@@ -139,6 +140,10 @@ export function WorkspaceView({
     ask,
     askValue,
     unsaved,
+    pendingRecovery,
+    restoreRecovery,
+    discardRecovery,
+    dismissRecovery,
     entryActions,
     editorRef,
     history,
@@ -799,6 +804,39 @@ export function WorkspaceView({
                 }}
               >
                 Save
+              </button>
+            </footer>
+          </div>
+        </Modal>
+      )}
+      {pendingRecovery && (
+        <Modal onEscape={dismissRecovery}>
+          <div
+            className="small-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Recovered writing"
+          >
+            <h2>Recovered writing</h2>
+            <p>
+              Draftbench kept an unsaved snapshot of “{pendingRecovery.documentPath}” from{' '}
+              {recoveryLabel(pendingRecovery)}. The file on disk is different, so nothing was
+              applied automatically.
+            </p>
+            <p>
+              Restoring loads the snapshot into the editor as unsaved writing. If the file changed
+              elsewhere since the snapshot, Save reports a conflict instead of overwriting it. “Not
+              now” keeps the snapshot for next time.
+            </p>
+            <footer>
+              <button className="secondary-button" onClick={dismissRecovery}>
+                Not now
+              </button>
+              <button className="danger-button" onClick={discardRecovery}>
+                Discard snapshot
+              </button>
+              <button className="primary-button" onClick={restoreRecovery}>
+                Restore into the editor
               </button>
             </footer>
           </div>

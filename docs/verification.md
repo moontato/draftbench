@@ -1,6 +1,6 @@
 # v0.2 verification and acceptance checklist
 
-**Archived v0.2.0 record. Current v0.2.1 audit, fixes and verification:** [stabilization-v021.md](stabilization-v021.md).
+**Archived v0.2.0 record. v0.2.1 audit and fixes:** [stabilization-v021.md](stabilization-v021.md). **Current release work and regression matrix:** [stabilization-v028.md](stabilization-v028.md).
 
 Recorded **2026-10-07** in Debian 12 x86-64. This is an in-place upgrade of v0.1.5, not a replacement application or certification of every OS/server.
 
@@ -57,7 +57,7 @@ Container-only WebKit compositor/sandbox overrides were confined to the driver l
 - No real llama.cpp/other model endpoint was provided; no real-model evaluation report, precision claim or throughput benchmark is available.
 - No live Tailscale/private inference node was reachable for acceptance.
 - Normal unlocked OS-keychain persistence, macOS/Windows compilation, packaging/signing/notarization and cross-platform accessibility need their own environments. The user previously confirmed the v0.1.3 macOS icon fix; that is not automated v0.2 packaging verification.
-- Broad long-document performance, hostile concurrent filesystem mutation/crash recovery and every Markdown dialect are not certified. No tokenizer/context discovery or automatic essay chunking exists.
+- Broad long-document performance, hostile concurrent filesystem mutation and every Markdown dialect are not certified. Crash recovery for unsaved writing is implemented and covered by Playwright plus the native smoke run (checkpoint, restart offer, Restore, conflict against an externally changed file, save a copy, clear on Save), but its behavior in a packaged macOS app is verified only by the manual checklist below. No tokenizer/context discovery or automatic essay chunking exists.
 - Harper is curated American English/plain block text; mark-level inline-code exclusion, dialect controls and user dictionaries remain follow-ups. Cancellation suppresses late native results rather than forcibly stopping a running linter worker.
 
 ## Manual acceptance with your servers
@@ -78,6 +78,27 @@ DRAFTBENCH_AI_MODEL=served-model npm test -- src/test/realServer.test.ts
 ```
 
 This Node-fetch fixture is not production native transport. See [README](../README.md) for build/smoke setup and [contributor notes](contributing.md) for architecture/migrations.
+
+## macOS acceptance (manual, Apple Silicon)
+
+Applies to the **current** release (the tables above are the archived v0.2.0 record). CI can only prove artifact properties for the macOS build: the release workflow mounts the DMG and asserts that the shipped binary contains both `arm64` and `x86_64` slices, that the signature is **ad-hoc** — accepting `TeamIdentifier=not set` and rejecting a real Developer team ID — and that `codesign --verify --deep --strict` passes. Launching, upgrading and using the app requires a Mac.
+
+Run these on an Apple Silicon Mac with your real documents and servers. Report each item as pass/fail with what you saw.
+
+1. **Checksum and install.** Download `Draftbench_0.2.8_universal.dmg` and `SHA256SUMS`, then `shasum -a 256 -c SHA256SUMS`. Expect the checksum line to end in `: OK`.
+2. **Gatekeeper.** Open the DMG and drag Draftbench to Applications. Because the build is ad-hoc signed and not notarized, expect a warning rather than a clean launch; use **Privacy & Security → Open Anyway**. Record the exact wording — a change here means the signing policy changed.
+3. **Upgrade over v0.2.7.** Install over the existing app without deleting anything. Confirm: the About/version shows 0.2.8; your recent projects, settings, backends/models, custom reviewers, profiles, document profiles and saved reviews are intact; opening a previously analyzed document restores its previous feedback **without sending any AI request** (watch the server log for zero requests).
+4. **Automatic Harper is a separate switch.** After the upgrade, **Settings → Analysis → Automatically review with Harper** must be off. Type in a document and confirm Harper does not run on its own while **Repeated word** still does. Then run **Run reviewers → Harper** explicitly and confirm it works with automatic mode off, and that enabling automatic mode persists across a quit/relaunch.
+5. **Harper and inline code.** In a paragraph containing `` `They has` `` and a fenced block, Harper must underline prose only — never the code span. Confirm no underline lands inside `<code>` visually and that prose around it is still reviewed.
+6. **Filters govern the underlines.** In the Analysis pane choose one analyzer and confirm the editor shows underlines only for that reviewer; then set severity/category filters and confirm the same. Enable **Show dismissed** and confirm dismissed findings are listed but never underlined. Use “hidden by filters · Show all” to reset.
+7. **Revision mode continuity.** Revise a Harper finding, edit the quoted sentence (the reference must say **Edited since reference**), close the pane, and reopen the same finding: it must resume the original capture rather than adopt the freshly regenerated warning. Confirm **Re-review** is the only action that replaces the captured advice, and that a different finding offers **New reference** instead of silently replacing the pin.
+8. **Crash recovery.** Type a new sentence, wait ~4 seconds, then force-quit Draftbench (Force Quit, or `kill -9` on the process). Relaunch and open the same document: Draftbench must show the file as it is on disk and offer **Restore into the editor / Discard snapshot / Not now**. Choose **Not now** first and confirm the snapshot is offered again on reopen. Then **Restore**, and confirm the recovered sentence is in the editor and marked unsaved.
+9. **Recovery must not overwrite.** With the recovered text still unsaved, change that file from another editor (or `printf` a different line into it). Click **Save** in Draftbench: it must report a conflict, leave the other editor's content untouched, and offer **Reload from disk** or **Save a copy**. Confirm on disk that the file still contains the external change and that a copy you saved contains the recovered text.
+10. **Recovery storage.** `ls -l ~/Library/Application\ Support/org.draftbench.desktop/recovery.json` must show `-rw-------` (0600), and no `recovery.json` may appear inside your writing project. After a successful Save the file must be gone or empty for that document. If Draftbench reports `Could not protect recovery data`, capture the exact message — it means the private-write verification failed on your filesystem.
+11. **Keychain.** Configure a backend key, quit and relaunch: the key must still be available (Test Connection succeeds without re-entering it). With the key deleted from Keychain, confirm the session-only warning appears and no plaintext key is written to settings.
+12. **Tailscale node.** With a remote `llama-server` over Tailscale, run a document review, then cancel mid-generation and confirm the server stops generating (watch its log) rather than only the client discarding the result.
+13. **Settings → Analyzers layout.** Confirm each analyzer's description, origin line, override fields, “Effective:” line and action buttons share one left edge under the analyzer name, and that Cancel saves nothing.
+14. **No silent network.** With all backends unreachable, confirm ordinary editing, pane toggling, profile changes, reopening documents and revision-mode actions never produce AI requests; only explicit reviewer runs do.
 
 ## Artifacts
 

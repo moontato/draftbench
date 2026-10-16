@@ -3,6 +3,7 @@ import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import type { Editor } from '@tiptap/core'
 import { hash } from '../diagnostics/hash'
+import { formatFingerprint } from '../diagnostics/proseMask'
 import type { Block, Snapshot } from '../diagnostics/types'
 
 // Session-stable identities. Markdown stays clean; loading content starts a new session.
@@ -88,11 +89,17 @@ export function extractBlocks(doc: PMNode): Block[] {
     if (!node.isTextblock) return
     let text = ''
     const positions: number[] = []
+    const codeRanges: { start: number; end: number }[] = []
     let finalPosition = pos + 1
     node.descendants((child, offset) => {
       const start = pos + 1 + offset
       if (child.isText) {
-        const value = child.text ?? ''
+        const value = child.text ?? '',
+          textStart = text.length
+        // Inline code is a text mark, so its characters are part of the plain-text
+        // projection. Record the span so prose-only reviewers can mask it.
+        if (child.marks.some((mark) => mark.type.name === 'code'))
+          codeRanges.push({ start: textStart, end: textStart + value.length })
         for (let i = 0; i < value.length; i++) positions.push(start + i)
         text += value
         finalPosition = start + value.length
@@ -120,6 +127,8 @@ export function extractBlocks(doc: PMNode): Block[] {
       to: pos + node.nodeSize - 1,
       positions,
       order: blocks.length,
+      ...(codeRanges.length ? { codeRanges } : {}),
+      formatHash: formatFingerprint(codeRanges, text),
     })
     return false
   })
