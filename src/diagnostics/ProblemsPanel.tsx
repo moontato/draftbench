@@ -14,8 +14,13 @@ import type { Diagnostic, Severity } from './types'
 import type { Analyzer } from '../analyzers/types'
 import { useReviewResize } from './useReviewResize'
 import { hasDistinctExplanation } from './feedbackText'
+import { clearFindingFilters, countHiddenFindings, type FindingFilters } from './filters'
 interface Props {
   findings: Diagnostic[]
+  /** Findings the current filters leave visible, shared with the editor underlines. */
+  visible: Diagnostic[]
+  filters: FindingFilters
+  onFilters: (patch: Partial<FindingFilters>) => void
   hidden?: boolean
   selected: string | null
   dismissed: Set<string>
@@ -36,11 +41,7 @@ interface Props {
 }
 const severityOrder: Record<Severity, number> = { error: 0, warning: 1, suggestion: 2, info: 3 }
 export function ProblemsPanel(props: Props) {
-  const [filter, setFilter] = useState('all'),
-    [severity, setSeverity] = useState('all'),
-    [category, setCategory] = useState('all'),
-    [group, setGroup] = useState('analyzer'),
-    [showDismissed, setShowDismissed] = useState(false)
+  const [group, setGroup] = useState('analyzer')
   const [engineOpen, setEngineOpen] = useState(false)
   const [alternative, setAlternative] = useState(0)
   useEffect(() => setAlternative(0), [props.selected])
@@ -50,22 +51,12 @@ export function ProblemsPanel(props: Props) {
   useEffect(() => {
     setCollapsed(false)
   }, [props.selected])
-  useEffect(() => {
-    if (filter !== 'all' && !props.analyzers.some((a) => a.id === filter)) setFilter('all')
-    if (category !== 'all' && !props.findings.some((f) => f.category === category))
-      setCategory('all')
-  }, [props.analyzers, props.findings, filter, category])
   const analyzerLabel = (analyzer: Analyzer) =>
     props.analyzers.filter((a) => a.name === analyzer.name).length > 1
       ? `${analyzer.name} (${analyzer.id})`
       : analyzer.name
-  const visible = props.findings.filter(
-    (f) =>
-      (showDismissed || !props.dismissed.has(f.id)) &&
-      (filter === 'all' || f.analyzerId === filter) &&
-      (severity === 'all' || f.severity === severity) &&
-      (category === 'all' || f.category === category),
-  )
+  const visible = props.visible,
+    hiddenByFilters = countHiddenFindings(props.findings, props.dismissed, visible)
   const groups = useMemo(() => {
     const result = new Map<string, Diagnostic[]>()
     for (const finding of [...visible].sort((a, b) =>
@@ -127,8 +118,8 @@ export function ProblemsPanel(props: Props) {
       <div className="analysis-controls">
         <select
           aria-label="Filter by analyzer"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={props.filters.analyzer}
+          onChange={(e) => props.onFilters({ analyzer: e.target.value })}
         >
           <option value="all">All analyzers</option>
           {props.analyzers.map((a) => (
@@ -139,8 +130,8 @@ export function ProblemsPanel(props: Props) {
         </select>
         <select
           aria-label="Filter by severity"
-          value={severity}
-          onChange={(e) => setSeverity(e.target.value)}
+          value={props.filters.severity}
+          onChange={(e) => props.onFilters({ severity: e.target.value })}
         >
           <option value="all">All severities</option>
           {Object.keys(severityOrder).map((s) => (
@@ -160,8 +151,8 @@ export function ProblemsPanel(props: Props) {
         </select>
         <select
           aria-label="Filter by category"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          value={props.filters.category}
+          onChange={(e) => props.onFilters({ category: e.target.value })}
         >
           <option value="all">All categories</option>
           {[...new Set(props.findings.map((f) => f.category))].map((c) => (
@@ -172,6 +163,15 @@ export function ProblemsPanel(props: Props) {
       <div className="analysis-status" role="status">
         {props.busy && <span className="spinner" />}
         {props.status || 'Ready when you are.'}
+        {hiddenByFilters > 0 && (
+          <button
+            className="text-button filter-hint"
+            onClick={() => props.onFilters(clearFindingFilters)}
+            title="Clear these filters and underline every finding again"
+          >
+            {hiddenByFilters} hidden by filters · Show all
+          </button>
+        )}
       </div>
       <div className="analysis-review-area" ref={areaRef}>
         <div className="findings-scroll">
@@ -183,13 +183,15 @@ export function ProblemsPanel(props: Props) {
               <h3>{props.findings.length ? 'Nothing in this view' : 'A second pair of eyes'}</h3>
               <p>
                 {props.findings.length
-                  ? 'Adjust your filters or show dismissed findings.'
+                  ? 'Adjust your filters or show dismissed findings. The editor underlines follow this view.'
                   : 'Analyze your draft for meaningful problems. You decide what to change.'}
               </p>
               <button
                 className="text-button"
                 disabled={!props.hasDocument || props.busy}
-                onClick={() => props.onRun(filter === 'all' ? undefined : filter)}
+                onClick={() =>
+                  props.onRun(props.filters.analyzer === 'all' ? undefined : props.filters.analyzer)
+                }
               >
                 Analyze document <ArrowUpRight size={14} />
               </button>
@@ -434,8 +436,8 @@ export function ProblemsPanel(props: Props) {
         <label>
           <input
             type="checkbox"
-            checked={showDismissed}
-            onChange={(e) => setShowDismissed(e.target.checked)}
+            checked={props.filters.showDismissed}
+            onChange={(e) => props.onFilters({ showDismissed: e.target.checked })}
           />{' '}
           Show dismissed
         </label>

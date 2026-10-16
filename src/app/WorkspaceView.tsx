@@ -110,6 +110,9 @@ export function WorkspaceView({
     saving,
     fileBusy,
     findings,
+    visibleFindings,
+    filters,
+    setFilters,
     selected,
     dismissed,
     reference,
@@ -523,6 +526,9 @@ export function WorkspaceView({
           <ProblemsPanel
             hidden={!!reference}
             findings={findings}
+            visible={visibleFindings}
+            filters={filters}
+            onFilters={setFilters}
             selected={selected}
             dismissed={dismissed}
             analyzers={analyzers}

@@ -2,6 +2,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ProblemsPanel } from '../diagnostics/ProblemsPanel'
+import { defaultFindingFilters } from '../diagnostics/filters'
 import { resolveIssue } from '../diagnostics/mapping'
 import { evalSnapshot } from '../eval/harness'
 import { development, analyzers } from '../analyzers/registry'
@@ -51,6 +52,9 @@ async function render(action: ReviewAction, needsRerun?: 'genre' | 'disabled') {
     root.render(
       createElement(ProblemsPanel, {
         findings: [{ ...finding, needsRerun }],
+        visible: [{ ...finding, needsRerun }],
+        filters: defaultFindingFilters,
+        onFilters: vi.fn(),
         selected: finding.id,
         dismissed: new Set<string>(),
         analyzers,

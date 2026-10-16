@@ -19,6 +19,12 @@ import { createAnalyzerRegistry } from '../analyzers/registry'
 import { useLocalAnalysis } from './useLocalAnalysis'
 import { SavedReviews } from '../analyzers/savedReviews'
 import { FeedbackSnapshots } from '../analyzers/feedbackSnapshots'
+import {
+  defaultFindingFilters,
+  filterFindings,
+  underlinedFindings,
+  type FindingFilters,
+} from '../diagnostics/filters'
 import { hash } from '../diagnostics/hash'
 import { refreshDiagnostic } from '../diagnostics/mapping'
 import {
@@ -71,7 +77,11 @@ export function useWorkspaceSession() {
     [fileBusy, setFileBusy] = useState(false)
   const [findings, setFindingsState] = useState<Diagnostic[]>([]),
     [selected, setSelected] = useState<string | null>(null),
-    [dismissed, setDismissed] = useState(new Set<string>())
+    [dismissed, setDismissed] = useState(new Set<string>()),
+    [filters, setFiltersState] = useState<FindingFilters>(defaultFindingFilters)
+  const setFilters = useCallback((patch: Partial<FindingFilters>) => {
+    setFiltersState((old) => ({ ...old, ...patch }))
+  }, [])
   const findingsRef = useRef(findings)
   // Native save/review completions can interleave before React renders. Keep the
   // authoritative feedback frame synchronous so a save cannot persist an older list.
@@ -622,15 +632,33 @@ export function useWorkspaceSession() {
       `Saved review · ${restored.scope === 'block' ? 'paragraph' : restored.scope} · ${restored.findings.length} findings · ${new Date(restored.analyzedAt).toLocaleString()}`,
     )
   }, [current?.documentId, session?.token, settingsLoaded, fileBusy])
+  const visibleFindings = useMemo(
+    () => filterFindings(findings, dismissed, filters),
+    [findings, dismissed, filters],
+  )
+  useEffect(() => {
+    // A removed analyzer or a category that is no longer present cannot stay selected.
+    setFiltersState((old) => {
+      const analyzer =
+        old.analyzer !== 'all' && !analyzers.some((a) => a.id === old.analyzer)
+          ? 'all'
+          : old.analyzer
+      const category =
+        old.category !== 'all' && !findings.some((f) => f.category === old.category)
+          ? 'all'
+          : old.category
+      return analyzer === old.analyzer && category === old.category
+        ? old
+        : { ...old, analyzer, category }
+    })
+  }, [analyzers, findings])
   useEffect(() => {
     const editor = editorRef.current
     if (editor && !editor.isDestroyed)
-      decorate(
-        editor,
-        findings.filter((f) => !dismissed.has(f.id)),
-      )
-    if (selected && !findings.some((f) => f.id === selected)) setSelected(null)
-  }, [findings, dismissed, selected])
+      decorate(editor, underlinedFindings(visibleFindings, dismissed))
+    // The list, the underlines and the open inspector always describe one view.
+    if (selected && !visibleFindings.some((f) => f.id === selected)) setSelected(null)
+  }, [visibleFindings, dismissed, selected])
   const enabled = (id: string) => analyzerEnabled(settings, id, profile)
   useLocalAnalysis({
     current,
@@ -1176,6 +1204,9 @@ export function useWorkspaceSession() {
     saving,
     fileBusy,
     findings,
+    visibleFindings,
+    filters,
+    setFilters,
     selected,
     dismissed,
     reference,

@@ -4,9 +4,11 @@
 
 Write → Analyze → Inspect → Decide → Fix. You remain the author. AI is a reviewer, not a chat interface or an automatic rewriter.
 
-Draftbench v0.2.6 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
+Draftbench v0.2.7 is built with **Tauri 2, React, TypeScript, and TipTap/ProseMirror**. Documents are ordinary local Markdown files. Inference uses native Rust HTTP—not browser networking—so plain-HTTP localhost, LAN, and Tailscale servers do not need CORS configuration.
 
-v0.2.6 adds adaptive Revision mode with a retained read-only reference, explicit re-review, durable current-feedback snapshots, and exact Undo/Redo review restoration. Closing and resuming a reference preserves its original baseline, including across automatic local rechecks. Automatic Harper reviews now have a separate persistent toggle, off by default, without disabling explicit Harper runs.
+v0.2.7 makes the Analysis filters authoritative for the whole review view: choosing an analyzer, severity or category underlines only the findings left in the panel, dismissed findings are never underlined again, and the status line shows how many findings the filters hide with a one-click reset.
+
+v0.2.6 added adaptive Revision mode with a retained read-only reference, explicit re-review, durable current-feedback snapshots, and exact Undo/Redo review restoration. Closing and resuming a reference preserves its original baseline, including across automatic local rechecks. Automatic Harper reviews now have a separate persistent toggle, off by default, without disabling explicit Harper runs.
 
 v0.2.5 added streamed SSE transport for request-specific desktop inference cancellation while still validating the complete answer before publishing findings.
 
@@ -20,7 +22,7 @@ v0.2.3 adds context-aware Clarity, actionable guidance/questions, Development re
 - Startup recent-project list: reopen one of your five most recently opened folders directly, without navigating the folder picker.
 - Comfortable rich-text prose editing: paragraphs, headings, lists, links, emphasis, quotes, inline code, code blocks, and hard breaks.
 - Collapsible document/analysis panes and focus mode.
-- Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings.
+- Inline diagnostic underlines plus a central Analysis/Problems panel: group by analyzer, severity, or passage; filter by analyzer/severity/category; inspect explanations; jump to text; dismiss/reset findings. The filters are shared with the editor, so choosing **Clarity** underlines only Clarity findings; the status line shows how many findings the filters hide.
 - A small History button at the top of the Analysis pane shows the document's previous manual runs, reviewer/model provenance, scope, finding counts, cache reuse, and outcomes.
 - Resizable, collapsible finding review with an explicit original/proposed-text diff. Apply is a normal editor history operation; Undo does not remove the author's preceding typing.
 - **Revision mode**: pin a finding's passage and captured feedback as a read-only reference beside the live draft, with the reference pane becoming a resizable bottom dock in narrow or short windows.
@@ -133,7 +135,7 @@ Use the **History** icon beside the analyzer-settings button at the top of the r
 
 History persists across restarts and follows document renames; copies have separate identities/history. It retains at most 50 runs per document, 300 per project, and approximately 500 KB total. An unfinished persisted run is labeled Interrupted on reopen, not successful. This is a bounded activity log, not a full archive of past findings.
 
-The installed/source build's version is shown in **Settings → General** (currently **v0.2.6**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
+The installed/source build's version is shown in **Settings → General** (currently **v0.2.7**). The UI reads the package version; release metadata and lockfiles are kept in sync and regression-tested. v0.2 introduces settings/project/analysis metadata version 2 while accepting and migrating supported version-1 data. See [migration details](docs/contributing.md#migrations-and-persistence).
 
 Success notifications automatically disappear after eight seconds. Errors and warnings remain until dismissed, so save/review problems can be read in full; routine successes do not replace them. A warning that review results could not be saved for reopening refers to review metadata, not loss of the Markdown draft.
 

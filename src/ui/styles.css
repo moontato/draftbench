@@ -652,6 +652,12 @@ summary:hover .tree-action {
   align-items: center;
   line-height: 1.6;
 }
+.filter-hint {
+  margin-left: auto;
+  font-size: 10px;
+  white-space: nowrap;
+  padding: 2px 0;
+}
 .analysis-review-area {
   display: flex;
   flex-direction: column;

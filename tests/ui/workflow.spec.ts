@@ -477,6 +477,53 @@ test('Problems filters, grouping, and focus mode retain the draft', async ({ pag
   await expect(page.getByRole('complementary', { name: 'Document analysis' })).toBeVisible()
 })
 
+test('filtering the analysis pane also limits the editor underlines', async ({ page }) => {
+  const settings = defaultSettings()
+  settings.analyzers.harper.enabled = true
+  await installDesktopFixture(page, {
+    settings,
+    files: { 'essay.md': 'The the plan has merit. She could of finished the report.\n' },
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open a writing folder' }).click()
+  await page.getByRole('button', { name: 'essay', exact: true }).click()
+  const repeated = page.locator(
+    '.editor-scroll [data-finding][title="“The” appears twice in a row."]',
+  )
+  const harper = page.locator('.editor-scroll [data-finding][title="Use could have."]')
+  await expect(repeated).toBeVisible()
+  await runReviewers(page, ['Harper'])
+  await expect(harper).toBeVisible()
+  await expect(page.locator('.editor-scroll [data-finding]')).toHaveCount(2)
+
+  // Only the selected reviewer stays listed and underlined.
+  await page.getByLabel('Filter by analyzer').selectOption('harper')
+  await expect(harper).toBeVisible()
+  await expect(repeated).toHaveCount(0)
+  await expect(page.locator('.finding-card')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: /1 hidden by filters/ })).toBeVisible()
+
+  // Severity narrows the same shared view, so the remaining warning disappears too.
+  await page.getByLabel('Filter by severity').selectOption('info')
+  await expect(page.locator('.editor-scroll [data-finding]')).toHaveCount(0)
+  await expect(page.locator('.finding-card')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /2 hidden by filters/ })).toBeVisible()
+
+  await page.getByRole('button', { name: /hidden by filters/ }).click()
+  await expect(page.getByLabel('Filter by analyzer')).toHaveValue('all')
+  await expect(page.getByLabel('Filter by severity')).toHaveValue('all')
+  await expect(page.locator('.editor-scroll [data-finding]')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: /hidden by filters/ })).toHaveCount(0)
+
+  // A dismissed finding stays listed when asked, but it is never underlined again.
+  await harper.click()
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await page.getByLabel('Show dismissed').check()
+  await expect(page.getByRole('button', { name: /Use could have/ })).toBeVisible()
+  await expect(harper).toHaveCount(0)
+  await expect(page.locator('.editor-scroll [data-finding]')).toHaveCount(1)
+})
+
 test('save a copy preserves the original, and canceling a switch keeps unsaved changes', async ({
   page,
 }) => {
